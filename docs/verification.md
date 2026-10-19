@@ -7,9 +7,9 @@ checked in layers, each covering what the others cannot. See [0002](decisions/00
 
 | Layer | What it gives | Where |
 |---|---|---|
-| Unit tests on virtual time | exact timing of deadlines and delays | `FerrySpec`, `PerKeySpec`, `FoldWriteSpec`, `ProjectedWriteSpec` |
+| Unit tests on virtual time | exact timing of deadlines and delays | `FerrySpec`, `PerKeySpec`, `FoldWriteSpec`, `ProjectedWriteSpec` (one object per record, and one row per entry) |
 | Model-based tests | batches and dispatch instants agree with an independent executable model, step by step | `FerryModelSpec`, `LanesSpec` |
-| Seeded simulations | random workloads, failures, interruptions and shutdown; every trace checked against the contract | `Simulation`, `PerKeySimulation`, `FencedWriterSimulation`, `ProjectedWriterSimulation` |
+| Seeded simulations | random workloads, failures, interruptions and shutdown; every trace checked against the contract | `Simulation`, `PerKeySimulation`, `FencedWriterSimulation`, `ProjectedWriterSimulation`, `PartialProjectionSimulation` |
 | Stress tests on the real scheduler | interleavings that virtual time never picks | `FerryStressSpec`, `PerKeyStressSpec` |
 | TLA+ model checking | every interleaving of the protocol, in a small instance, for safety and liveness | [`formal/`](https://github.com/EtaCassiopeia/zio-ferry/tree/main/formal) |
 
@@ -51,6 +51,7 @@ counterexample proves the mechanism is needed, and that the model can notice its
 | `PerKey.tla` (`PerKey`, `PerKeyBatchOnly`) | all of the above per key, plus one call in flight per key (direct calls included) and rank order; every caller answered, every direct caller done | `PerKeyUnsorted`: out of rank order. `PerKeyNoBusyGuard`, `PerKeyNoDirectGuard`, `PerKeyNoAwaitCall`: two calls in flight for one key. `PerKeyNonAtomicTake`, `PerKeyNonAtomicAdmission`: a caller is stranded |
 | `FencedWriter.tla` | across processes with arbitrary routing, crashes and lost answers: no input applied twice, every answer true | `FencedWriterUnfenced`, `FencedWriterNoDedup`: an input is applied twice |
 | `ProjectedWriter.tla` | the same for a commit followed by a fenced projection and a sweeper: no entry applied or projected twice, the view a prefix of the log, every answer true, an input answered "projected" only once it is in the view; the view eventually equals the log | `ProjectedWriterUnfencedProject`: an entry is projected twice. `ProjectedWriterEarlyAnswer`: answered "projected" before the view has it. `ProjectedWriterNoResume`: without retrying a failed projection or a sweeper, one cut short by a crash or a give-up is never finished (liveness) |
+| `ProjectedWriterPartial.tla` | the same for a view of one row per entry, each row its own write: no entry applied twice, no row written twice, every row from the log, the marker clear only when every entry has its row, every answer true, an input answered "projected" only once its row is in the view; eventually every entry has its row and the marker is clear | `ProjectedWriterPartialUnconditionalRows`: a row is written twice. `ProjectedWriterPartialEarlyClear`: the marker clears with a refused row missing. `ProjectedWriterPartialUnfencedClear`: a clear made for a shorter log clears the marker a later commit set. `ProjectedWriterPartialNoResume`: without reading again or a sweeper, a refused row is never written (liveness) |
 
 CI runs every configuration on every change, and fails if a passing model fails or a weakened variant passes. A variant
 that removes a liveness mechanism must violate its temporal property rather than an invariant.

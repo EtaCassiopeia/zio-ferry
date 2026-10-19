@@ -80,10 +80,11 @@ object ProjectedWrites extends ZIOAppDefault:
   // --8<-- [start:projected]
   /**
    * The commit is a `FoldWrite`, exactly as for a one-write store; `ProjectedWrite` adds the projection, the marker
-   * test and the outcome that says which of the two writes an entry has been through.
+   * test and the outcome that says which of the two writes an entry has been through. The view is one object per
+   * record, so `wholeRecord` adapts a `project` that writes it whole.
    */
   def write(store: Store): ProjectedWrite[Any, StoreError, String, Entry, String, Record, Either[String, Int]] =
-    ProjectedWrite(
+    ProjectedWrite.wholeRecord(
       fold = FoldWrite(
         id = _.id,
         read = store.read,
@@ -118,11 +119,11 @@ object ProjectedWrites extends ZIOAppDefault:
 
   // --8<-- [start:answer]
   /** What a client is told. `Committed` is a success: the entry is durable, only its view is late. */
-  def describe(result: Either[FerryError[StoreError], Outcome[Either[String, Int]]]): String = result match
-    case Right(Outcome.Projected(Right(position))) => s"stored at $position"
-    case Right(Outcome.Committed(Right(position))) => s"stored at $position, view pending"
-    case Right(Outcome.Projected(Left(reason)))    => s"rejected: $reason"
-    case Right(Outcome.Committed(Left(reason)))    => s"rejected: $reason"
+  def describe(result: Either[FerryError[StoreError], Outcome[StoreError, Either[String, Int]]]): String = result match
+    case Right(Outcome.Projected(Right(position)))        => s"stored at $position"
+    case Right(Outcome.Committed(Right(position), cause)) => s"stored at $position, view pending ($cause)"
+    case Right(Outcome.Projected(Left(reason)))           => s"rejected: $reason"
+    case Right(Outcome.Committed(Left(reason), _))        => s"rejected: $reason"
     case Left(error) => error.fold("too busy, retry later", e => s"store failed ($e), retry")
   // --8<-- [end:answer]
 

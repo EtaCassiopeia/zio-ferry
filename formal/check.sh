@@ -16,6 +16,12 @@
 #     ProjectedWriterEarlyAnswer      -> a command is answered "projected" before it is in the view
 #     ProjectedWriterNoResume         -> without retry and a sweeper, a projection cut short by a crash or a give-up is
 #                                        never finished (liveness)
+#   ProjectedWriterPartial.tla  the same, for a view of one row per entry (a per-entry ProjectedWrite); safety and liveness
+#     ProjectedWriterPartialUnconditionalRows -> a node's row and the sweeper's both land
+#     ProjectedWriterPartialEarlyClear        -> the marker clears with a refused row missing
+#     ProjectedWriterPartialUnfencedClear     -> a clear made for a shorter log clears the marker a later commit set
+#     ProjectedWriterPartialNoResume          -> without reading again and a sweeper, a refused row is never written
+#                                                (liveness)
 #
 # Usage: formal/check.sh [path/to/tla2tools.jar]   (defaults to $TLA2TOOLS or ./tla2tools.jar)
 set -euo pipefail
@@ -62,3 +68,11 @@ passes ProjectedWriter ProjectedWriter
 for variant in ProjectedWriterUnfencedProject ProjectedWriterEarlyAnswer; do fails ProjectedWriter "$variant"; done
 # TLC 1.7.4 (CI) prints "Temporal properties were violated"; newer releases name the property.
 fails ProjectedWriter ProjectedWriterNoResume "Temporal propert(ies were|y EventuallyProjected was) violated"
+
+passes ProjectedWriterPartial ProjectedWriterPartial
+# The variants list Safety's conjuncts one by one, so that each must break the one it is about.
+fails ProjectedWriterPartial ProjectedWriterPartialUnconditionalRows "Invariant RowsAtMostOnce is violated"
+for variant in ProjectedWriterPartialEarlyClear ProjectedWriterPartialUnfencedClear; do
+  fails ProjectedWriterPartial "$variant" "Invariant MarkerHonest is violated"
+done
+fails ProjectedWriterPartial ProjectedWriterPartialNoResume "Temporal propert(ies were|y EventuallyProjected was) violated"

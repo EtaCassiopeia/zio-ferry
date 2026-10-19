@@ -7,7 +7,7 @@ Every caller gets exactly one of these. None is left waiting.
 | Outcome | When | What to do |
 |---|---|---|
 | Its result `A` | The batch call succeeded. With per-input outcomes, `A` may itself be a rejection of this input on its merits. | Use it. A rejection on the merits is not worth retrying. |
-| `Outcome.Committed` (with [`ProjectedWrite`](projected-write.md)) | The input is durable, but its projection was not confirmed: it kept failing. | Tell the client it was accepted. A sweeper you run, or the key's next batch, finishes the view. Do not resubmit to hurry it. |
+| `Outcome.Committed(provisional, cause)` (with [`ProjectedWrite`](projected-write.md)) | The input is durable, but its projection was not confirmed: its row failed, or the record's projection kept failing. `cause` says which error. | Tell the client it was accepted, and why its view is late. A sweeper you run, or the key's next batch, finishes the view. Do not resubmit to hurry it. |
 | `FerryError.Rejected` | The waiting room was full (`maxQueueing`, or `maxQueuedWeight` for `perKey`). Nothing was sent. | Retry after a backoff, or shed the load. |
 | `FerryError.Failed(e)` | The batch call carrying the input failed with `e`. Every caller in that batch gets it. | Retry if the call is idempotent, which a [fenced write](fold-write.md) is. |
 | A defect | The batch call died, or `extract` threw for this caller. | Fix the bug. |

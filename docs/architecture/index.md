@@ -51,7 +51,7 @@ flowchart TB
 | `Lanes.scala` | `perKey`'s pure waiting room: every scheduling decision |
 | `Order.scala` | Pluggable dispatch order |
 | `FoldWrite.scala` | The read, apply, conditional-write batch call |
-| `ProjectedWrite.scala` | The same, followed by a fenced projection that can be resumed from the store |
+| `ProjectedWrite.scala` | The same, followed by a fenced projection that can be resumed from the store; the projection answers which entries it left pending, so a view of one row per entry can land in part |
 
 ## Two kernels
 

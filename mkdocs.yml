@@ -97,6 +97,7 @@ nav:
           - 0012 FoldWrite: decisions/0012-fold-write-helper.md
           - 0013 Rename to Ferry: decisions/0013-rename-to-ferry.md
           - 0014 Commit, then project: decisions/0014-commit-then-project.md
+          - 0015 Project per entry: decisions/0015-per-entry-projection.md
       - "Proposal: ordering, lateness, grouping": design/ordering.md
   - API reference: https://etacassiopeia.github.io/zio-ferry/api/
   - Development: development.md

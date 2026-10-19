@@ -15,6 +15,7 @@ SCENES = {
     "fold-write": "fold_write",
     "fleet": "fleet",
     "projected-write": "projected_write",
+    "projected-rows": "projected_rows",
 }
 
 if __name__ == "__main__":
