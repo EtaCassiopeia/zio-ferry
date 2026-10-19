@@ -99,7 +99,7 @@ object Ferry:
    *   The order in which a key's waiting inputs are sent: see [[Order]]. Defaults to submission order.
    * @param call
    *   The batch call, given the key and that key's inputs in `order`. [[FoldWrite]] implements the common read-once,
-   *   apply, conditional-write call.
+   *   apply, conditional-write call, and [[ProjectedWrite]] the same with a second write that projects the result.
    * @param extract
    *   Picks one caller's result out of the batch result. If it throws, that caller gets the exception as a defect.
    */

@@ -114,6 +114,21 @@ object Snippets:
       .unit
   // --8<-- [end:metrics]
 
+  // --8<-- [start:period]
+  final case class Ledger(period: Int, totals: Map[Int, Long])
+
+  enum Posting:
+    case Add(amount: Long)
+    case Close
+
+  /** Closing a period moves every later posting of the batch, and of later batches, to the next one. */
+  def post(ledger: Ledger, posting: Posting): (Ledger, Int) = posting match
+    case Posting.Add(amount) =>
+      val total = ledger.totals.getOrElse(ledger.period, 0L) + amount
+      ledger.copy(totals = ledger.totals.updated(ledger.period, total)) -> ledger.period
+    case Posting.Close => ledger.copy(period = ledger.period + 1) -> (ledger.period + 1)
+  // --8<-- [end:period]
+
   // --8<-- [start:shards]
   /**
    * Spreads keys over `n` independent ferries. Every per-key guarantee still holds: a key always maps to the same one.

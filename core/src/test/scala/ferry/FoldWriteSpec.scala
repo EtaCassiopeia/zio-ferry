@@ -39,6 +39,24 @@ object FoldWriteSpec extends ZIOSpecDefault:
   private def foldWrite(s: Store): FoldWrite[Any, String, String, Int, Int, Vector[Int], Either[String, Int]] =
     FoldWrite((n: Int) => n, s.read, step, s.writeIf, Schedule.recurs(3))
 
+  /** A per-key ledger of totals by period; closing a period moves every later posting to the next one. */
+  final private case class Ledger(period: Int, totals: Map[Int, Long])
+
+  private enum Posting:
+    case Add(id: String, amount: Long)
+    case Close(id: String)
+
+  private def postingId(posting: Posting): String = posting match
+    case Posting.Add(id, _) => id
+    case Posting.Close(id)  => id
+
+  /** The outcome of a posting is the period it landed in. */
+  private def post(ledger: Ledger, posting: Posting): (Ledger, Int) = posting match
+    case Posting.Add(_, amount) =>
+      val total = ledger.totals.getOrElse(ledger.period, 0L) + amount
+      ledger.copy(totals = ledger.totals.updated(ledger.period, total)) -> ledger.period
+    case Posting.Close(_) => ledger.copy(period = ledger.period + 1) -> (ledger.period + 1)
+
   def spec = suite("FoldWrite")(
     test("applies a batch in order with one read and one write, and answers each input on its own") {
       for
@@ -87,6 +105,29 @@ object FoldWriteSpec extends ZIOSpecDefault:
         s    <- store(Fault.Conflict, Fault.Conflict, Fault.Conflict, Fault.Conflict)
         exit <- foldWrite(s).call("k", NonEmptyChunk(5)).exit
       yield assertTrue(exit.causeOption.flatMap(_.failureOption).contains("conflict"))
+    },
+    test("answers each input as of the state at its own position, not the final state") {
+      for
+        s        <- store()
+        outcomes <- foldWrite(s).call("k", NonEmptyChunk(5, 7, 9))
+      yield assertTrue(outcomes == Map(5 -> Right(0), 7 -> Right(1), 9 -> Right(2)))
+    },
+    test("lets an input change how later inputs of the same batch apply, such as closing a period") {
+      for
+        ledgers <- Ref.make(Map.empty[String, Ledger])
+        write = FoldWrite[Any, Nothing, String, Posting, String, Ledger, Int](
+          id = postingId,
+          read = key => ledgers.get.map(_.getOrElse(key, Ledger(0, Map.empty))),
+          step = post,
+          write = (key, _, after) => ledgers.update(_.updated(key, after)),
+          retry = Schedule.stop
+        )
+        outcomes <- write.call("k", NonEmptyChunk(Posting.Add("a", 1), Posting.Close("c"), Posting.Add("b", 2)))
+        ledger   <- ledgers.get.map(_("k"))
+      yield assertTrue(
+        ledger == Ledger(period = 1, totals = Map(0 -> 1L, 1 -> 2L)),
+        outcomes == Map("a" -> 0, "c" -> 1, "b" -> 1)
+      )
     },
     test("serves Ferry.perKey as its call and extract") {
       for

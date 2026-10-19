@@ -71,6 +71,7 @@ nav:
       - Per-key batching: guide/per-key.md
       - Dispatch order: guide/ordering.md
       - Fenced writes with FoldWrite: guide/fold-write.md
+      - Commit, then project: guide/projected-write.md
       - Errors and lifecycle: guide/errors-and-lifecycle.md
       - Configuration and tuning: guide/configuration.md
   - Architecture:
@@ -95,6 +96,7 @@ nav:
           - 0011 Pluggable dispatch order: decisions/0011-pluggable-dispatch-order.md
           - 0012 FoldWrite: decisions/0012-fold-write-helper.md
           - 0013 Rename to Ferry: decisions/0013-rename-to-ferry.md
+          - 0014 Commit, then project: decisions/0014-commit-then-project.md
       - "Proposal: ordering, lateness, grouping": design/ordering.md
   - API reference: https://etacassiopeia.github.io/zio-ferry/api/
   - Development: development.md
