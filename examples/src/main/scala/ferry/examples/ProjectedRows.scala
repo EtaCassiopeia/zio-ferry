@@ -158,24 +158,31 @@ object ProjectedRows extends ZIOAppDefault:
           Entry(s"entry-$n", entity, amount = if n == 42 then 0 else n.toLong + 1)
         }
         results <- ZIO.foreachPar(entries)(entry => writer(entry).either)
-        answers = results.map(describe)
-        causes  = results.collect { case Right(Outcome.Committed(Right(_), cause)) => cause }.groupBy(identity)
+        causes = results.collect { case Right(Outcome.Committed(Right(_), cause)) => cause }.groupBy(identity)
         // Wait for the sweeper to finish what the writers could not.
-        _        <- (ZIO.sleep(10.millis) *> store.pendingEntities).repeatUntil(_.isEmpty)
+        _ <- (ZIO.sleep(10.millis) *> store.pendingEntities)
+          .repeatUntil(_.isEmpty)
+          .timeout(10.seconds)
+          .someOrElseZIO(store.pendingEntities.flatMap(left => ZIO.fail(s"still pending after 10 s: $left")))
         snapshot <- store.snapshot
         _        <- Console.printLine(
-          s"${entries.size} entries: ${answers.count(_.startsWith("stored"))} stored, " +
-            s"${answers.count(_.startsWith("rejected"))} rejected, ${results.count(_.isLeft)} failed"
+          s"${entries.size} entries: ${results.count(_.exists(_.value.isRight))} stored, " +
+            s"${results.count(_.exists(_.value.isLeft))} rejected, ${results.count(_.isLeft)} failed"
         )
         _ <- Console.printLine(
           s"${causes.values.map(_.size).sum} answered with their row pending, finished by the sweeper: " +
             causes.toList.sortBy(_._1.ordinal).map((cause, all) => s"${all.size} $cause").mkString(", ")
         )
+        _ <- Console.printLine(s"entry-42 was told: ${describe(results(42))}")
         _ <- ZIO.foreachDiscard(snapshot.toList.sortBy(_._1)) { case (entity, (record, rows)) =>
           Console.printLine(
             s"$entity: ${record.log.size} entries, ${rows.size} rows, each once: ${rows.distinct.size == rows.size}; " +
               s"rows equal log: ${rows.sorted == record.log.sorted}"
           )
         }
+        broken = snapshot.collect {
+          case (entity, (record, rows)) if rows.distinct != rows || rows.sorted != record.log.sorted => entity
+        }
+        _ <- ZIO.fail(s"views whose rows do not equal their logs: ${broken.mkString(", ")}").when(broken.nonEmpty)
       yield ()
     }
