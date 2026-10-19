@@ -11,6 +11,11 @@
 #     PerKeyNonAtomicTake, PerKeyNonAtomicAdmission -> a caller is stranded
 #   FencedWriter.tla  the single-writer-per-key deployment pattern, against a store with conditional appends
 #     FencedWriterUnfenced, FencedWriterNoDedup                         -> a command is applied twice
+#   ProjectedWriter.tla  the same pattern for a store that commits, then projects (ProjectedWrite); safety and liveness
+#     ProjectedWriterUnfencedProject  -> an entry is projected twice
+#     ProjectedWriterEarlyAnswer      -> a command is answered "projected" before it is in the view
+#     ProjectedWriterNoResume         -> without retry and a sweeper, a projection cut short by a crash or a give-up is
+#                                        never finished (liveness)
 #
 # Usage: formal/check.sh [path/to/tla2tools.jar]   (defaults to $TLA2TOOLS or ./tla2tools.jar)
 set -euo pipefail
@@ -29,14 +34,15 @@ passes() { # spec config
   tlc "$1" "$2" | tail -n 4
 }
 
-fails() { # spec config
-  echo "== $2 (expected: Safety violated)"
+fails() { # spec config [expected TLC message]
+  local expected="${3:-Invariant Safety is violated}"
+  echo "== $2 (expected: $expected)"
   if out="$(tlc "$1" "$2")"; then
     echo "$out" | tail -n 4
-    echo "FAIL: $2 was expected to violate an invariant but passed" >&2
+    echo "FAIL: $2 was expected to report \"$expected\" but passed" >&2
     exit 1
   fi
-  echo "$out" | grep -q "Invariant Safety is violated" || { echo "$out" | tail -n 20; exit 1; }
+  echo "$out" | grep -qE "$expected" || { echo "$out" | tail -n 20; exit 1; }
   echo "violated, as expected"
 }
 
@@ -51,3 +57,8 @@ done
 
 passes FencedWriter FencedWriter
 for variant in FencedWriterUnfenced FencedWriterNoDedup; do fails FencedWriter "$variant"; done
+
+passes ProjectedWriter ProjectedWriter
+for variant in ProjectedWriterUnfencedProject ProjectedWriterEarlyAnswer; do fails ProjectedWriter "$variant"; done
+# TLC 1.7.4 (CI) prints "Temporal properties were violated"; newer releases name the property.
+fails ProjectedWriter ProjectedWriterNoResume "Temporal propert(ies were|y EventuallyProjected was) violated"
