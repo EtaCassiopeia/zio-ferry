@@ -30,7 +30,7 @@ def build() -> Scene:
     # The batch, and what its callers are told
     for i, n in enumerate([1, 2]):
         y = 150 + i * 50
-        sc.add(sc.chip(n, PINK, sc.path([(0.2, 20, y, 0), (0.6, 60, y)])))
+        sc.add(sc.chip(n, PINK, sc.path([(0.2, 20, y, 0), (0.6, 60, y), (T - 0.4, 60, y), (T - 0.1, 60, y, 0)])))
         sc.add(sc.text(80, y + 4, "Committed", "tag", AMBER, style=sc.shown([(4.2 + 0.15 * i, T - 0.3)])))
     sc.add(sc.text(28, 260, "durable · view pending", "hud", AMBER, style=sc.shown([(4.4, T - 0.3)])))
 
@@ -57,7 +57,7 @@ def build() -> Scene:
         sc.add(sc.chip(n, PINK, sc.shown([(2.0 + 0.1 * j, T - 0.2)]), cx + 28 * (j + 1), LOG_Y),
                sc.chip(n, PINK, sc.shown([(7.2 + 0.1 * j, T - 0.2)]), cx + 28 * (j + 1), VIEW_Y))
     mid = STORE_X + STORE_W / 2
-    sc.add(sc.text(mid, MARK_Y + 4, "projected 1 / 1", "tag", GREEN, "middle", sc.shown([(0.0, 2.0)])),
+    sc.add(sc.text(mid, MARK_Y + 4, "projected 1 / 1", "tag", GREEN, "middle", sc.shown([(0.0, 2.0), (T - 0.2, T)])),
            sc.text(mid, MARK_Y + 4, "pending: projected 1 / 3", "tag", AMBER, "middle", sc.shown([(2.0, 7.3)])),
            sc.text(mid, MARK_Y + 4, "projected 3 / 3", "tag", GREEN, "middle", sc.shown([(7.3, T - 0.2)])),
            sc.pulse(mid, MARK_Y, AMBER, 2.0, 18), sc.pulse(mid, MARK_Y, CYAN, 6.2, 18),
