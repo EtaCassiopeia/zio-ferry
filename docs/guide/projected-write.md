@@ -14,6 +14,8 @@ the way [`FoldWrite`](fold-write.md) packages the one-write version.
 
 ## The round trip
 
+![Commit, then project: a refused projection leaves the record pending, a sweeper finishes it, and the fence refuses a late second projection](../assets/projected-write.svg)
+
 `ProjectedWrite(fold, pending, project)`:
 
 | Parameter | What it does |
