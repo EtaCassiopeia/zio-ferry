@@ -136,7 +136,7 @@ object ProjectedWriterSimulation:
     else r.copy(log = r.log :+ command.id) -> r.log.size
 
   def write(store: Store, project: (Int, Record) => IO[StoreError, Unit]) =
-    ProjectedWrite(FoldWrite((_: Command).id, store.read, step, store.commit, retry), pending, project)
+    ProjectedWrite.wholeRecord(FoldWrite((_: Command).id, store.read, step, store.commit, retry), pending, project)
 
   def scenario: Gen[Any, Scenario] =
     for
@@ -190,7 +190,9 @@ object ProjectedWriterSimulation:
             .modify(m => m.getOrElse(slot, 0) -> m.updated(slot, m.getOrElse(slot, 0) + 1))
             .flatMap(n => overlap.set(true).when(n > 0)) *>
             (if writer.earlyAnswer then
-               projected.fold.call(key, commands).map(_.view.mapValues(Outcome.Projected(_)).toMap)
+               projected.fold
+                 .call(key, commands)
+                 .map(_.view.mapValues(Outcome.Projected(_)).toMap[Int, Outcome[StoreError, Int]])
              else projected.call(key, commands)).ensuring(inUse.update(m => m.updated(slot, m(slot) - 1)))
         }(projected.outcome))
       }

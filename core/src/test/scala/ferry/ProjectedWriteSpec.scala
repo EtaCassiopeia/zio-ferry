@@ -104,7 +104,7 @@ object ProjectedWriteSpec extends ZIOSpecDefault:
     FoldWrite((n: Int) => n, s.readCounted, step, s.commit, Schedule.recurs(3))
 
   private def projected(s: Store): ProjectedWrite[Any, String, String, Int, Int, Record, Either[String, Int]] =
-    ProjectedWrite(fold(s), pending, s.project)
+    ProjectedWrite.wholeRecord(fold(s), pending, s.project)
 
   def spec = suite("ProjectedWrite")(
     test("commits once and projects once, and answers each input with its own position") {
@@ -151,7 +151,7 @@ object ProjectedWriteSpec extends ZIOSpecDefault:
         record   <- s.read("k")
         view     <- s.view("k")
       yield assertTrue(
-        outcomes == Map(5 -> Outcome.Committed(Right(0)), 7 -> Outcome.Committed(Right(1))),
+        outcomes == Map(5 -> Outcome.Committed(Right(0), "refused"), 7 -> Outcome.Committed(Right(1), "refused")),
         !outcomes(5).isProjected,
         stuck == Record(Vector(5, 7), 0),
         before == Vector.empty,
@@ -237,14 +237,20 @@ object ProjectedWriteSpec extends ZIOSpecDefault:
     },
     test("resume makes no write when nothing is pending, and projects a pending record") {
       for
-        idle   <- store(seed = Map("k" -> (Record(Vector(5), 1), Vector(5))))
-        _      <- projected(idle).resume("k")
-        none   <- idle.projectCalls.get
-        busy   <- store(seed = Map("k" -> (Record(Vector(5, 7), 1), Vector(5))))
-        _      <- projected(busy).resume("k")
-        record <- busy.read("k")
-        view   <- busy.view("k")
-      yield assertTrue(none == 0, record == Record(Vector(5, 7), 2), view == Vector(5, 7))
+        idle     <- store(seed = Map("k" -> (Record(Vector(5), 1), Vector(5))))
+        nothing  <- projected(idle).resume("k")
+        none     <- idle.projectCalls.get
+        busy     <- store(seed = Map("k" -> (Record(Vector(5, 7), 1), Vector(5))))
+        finished <- projected(busy).resume("k")
+        record   <- busy.read("k")
+        view     <- busy.view("k")
+      yield assertTrue(
+        none == 0,
+        nothing == ProjectedWrite.Projection.complete[Int, String],
+        finished == ProjectedWrite.Projection.complete[Int, String],
+        record == Record(Vector(5, 7), 2),
+        view == Vector(5, 7)
+      )
     },
     test("resume fails with the store's error once its retries are exhausted, and leaves the record pending") {
       for
@@ -276,7 +282,7 @@ object ProjectedWriteSpec extends ZIOSpecDefault:
         // The first projection finds that another writer committed 7 since this call committed 9.
         interleaved = (key: String, r: Record) =>
           rival.getAndSet(false).flatMap(first => fold(s).call(key, NonEmptyChunk(7)).when(first)) *> s.project(key, r)
-        write = ProjectedWrite(fold(s), pending, interleaved)
+        write = ProjectedWrite.wholeRecord(fold(s), pending, interleaved)
         outcomes <- write.call("k", NonEmptyChunk(9))
         record   <- s.read("k")
         view     <- s.view("k")
