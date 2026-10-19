@@ -129,6 +129,32 @@ object Snippets:
     case Posting.Close => ledger.copy(period = ledger.period + 1) -> (ledger.period + 1)
   // --8<-- [end:period]
 
+  // --8<-- [start:dependent]
+  /** An account's balance, and the id of the entry that blocked it, if one did. */
+  final case class Account(balance: Long, blockedBy: Option[String])
+
+  final case class Debit(id: String, amount: Long)
+
+  enum Rejection:
+    case InsufficientFunds
+    case NotAttempted(blockedBy: String)
+
+  /**
+   * An account's entries depend on the ones before them: once one is rejected, the ones after it are not attempted, in
+   * this batch or in a later one, until something unblocks the account. The block is part of the state, so it is
+   * written with the batch and survives the batch boundary, a retry and the process.
+   */
+  def debit(account: Account, entry: Debit): (Account, Either[Rejection, Long]) =
+    account.blockedBy match
+      case Some(id) if id != entry.id =>
+        account -> Left(Rejection.NotAttempted(id)) // the blocking entry, replayed, is judged again
+      case _ if entry.amount > account.balance =>
+        account.copy(blockedBy = Some(entry.id)) -> Left(Rejection.InsufficientFunds)
+      case _ =>
+        val balance = account.balance - entry.amount
+        account.copy(balance = balance) -> Right(balance)
+  // --8<-- [end:dependent]
+
   // --8<-- [start:shards]
   /**
    * Spreads keys over `n` independent ferries. Every per-key guarantee still holds: a key always maps to the same one.

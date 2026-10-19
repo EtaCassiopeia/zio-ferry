@@ -57,6 +57,24 @@ object FoldWriteSpec extends ZIOSpecDefault:
       ledger.copy(totals = ledger.totals.updated(ledger.period, total)) -> ledger.period
     case Posting.Close(_) => ledger.copy(period = ledger.period + 1) -> (ledger.period + 1)
 
+  /** An account whose entries depend on the ones before them: a rejected entry blocks the account. */
+  final private case class Account(balance: Long, blockedBy: Option[String])
+
+  final private case class Debit(id: String, amount: Long)
+
+  private enum Rejection:
+    case InsufficientFunds
+    case NotAttempted(blockedBy: String)
+
+  private def debit(account: Account, entry: Debit): (Account, Either[Rejection, Long]) =
+    account.blockedBy match
+      case Some(id) if id != entry.id          => account -> Left(Rejection.NotAttempted(id))
+      case _ if entry.amount > account.balance =>
+        account.copy(blockedBy = Some(entry.id)) -> Left(Rejection.InsufficientFunds)
+      case _ =>
+        val balance = account.balance - entry.amount
+        account.copy(balance = balance) -> Right(balance)
+
   def spec = suite("FoldWrite")(
     test("applies a batch in order with one read and one write, and answers each input on its own") {
       for
@@ -127,6 +145,31 @@ object FoldWriteSpec extends ZIOSpecDefault:
       yield assertTrue(
         ledger == Ledger(period = 1, totals = Map(0 -> 1L, 1 -> 2L)),
         outcomes == Map("a" -> 0, "c" -> 1, "b" -> 1)
+      )
+    },
+    test("lets a rejected input block the ones after it, in its batch and the next, when the state carries the block") {
+      for
+        accounts <- Ref.make(Map.empty[String, Account])
+        write = FoldWrite[Any, Nothing, String, Debit, String, Account, Either[Rejection, Long]](
+          id = _.id,
+          read = key => accounts.get.map(_.getOrElse(key, Account(10, None))),
+          step = debit,
+          write = (key, _, after) => accounts.update(_.updated(key, after)),
+          retry = Schedule.stop
+        )
+        first   <- write.call("k", NonEmptyChunk(Debit("a", 4), Debit("b", 8), Debit("c", 1)))
+        next    <- write.call("k", NonEmptyChunk(Debit("d", 1)))
+        replay  <- write.call("k", NonEmptyChunk(Debit("b", 8)))
+        account <- accounts.get.map(_("k"))
+      yield assertTrue(
+        first == Map(
+          "a" -> Right(6L),
+          "b" -> Left(Rejection.InsufficientFunds),
+          "c" -> Left(Rejection.NotAttempted("b"))
+        ),
+        next == Map("d" -> Left(Rejection.NotAttempted("b"))),
+        replay == Map("b" -> Left(Rejection.InsufficientFunds)),
+        account == Account(6, Some("b"))
       )
     },
     test("serves Ferry.perKey as its call and extract") {

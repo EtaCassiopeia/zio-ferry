@@ -61,6 +61,35 @@ In the batch `Add(1)`, `Close`, `Add(2)` the first amount lands in period 0 and 
 arrives after a later one was already written, the fold over the state decides, as for any late input
 ([0011](../decisions/0011-pluggable-dispatch-order.md)).
 
+## Inputs that depend on the ones before them
+
+By default each input is judged on its own: a rejected input leaves the state as it was, and the inputs after it in the
+batch apply as if it had not been there. One caller's invalid input never fails another caller's valid one
+([0006](../decisions/0006-per-input-outcomes.md)).
+
+Some keys are not like that. If an account's entries must apply in sequence, an entry after a rejected one must not be
+attempted. That rule is about the key, not about the batch: which inputs share a batch is a matter of timing, so a
+rule that only looked back inside one batch would answer the same inputs differently under load. Put the block in the
+state instead, where `step` sees it for every later input, in this batch and the next:
+
+```scala
+--8<-- "Snippets.scala:dependent"
+```
+
+A caller then gets one of three answers: its result, its own rejection, or `NotAttempted` naming the entry that
+blocked the key. Lifting the block is an entry of its own, a correction or a reversal, which `step` applies by clearing
+`blockedBy`; until it arrives, every entry of the key is answered `NotAttempted` without a write. A rejected entry that
+blocked the key does change the state, so the batch is written, and a retry after a lost response finds the block in
+place and answers the same way.
+
+If the dependency really should last only for the batch, keep the block in a wrapper around the state that `read`
+creates unblocked and `write` strips; `FoldWrite` writes whenever the wrapper changed, so a batch that only set the
+block costs one write of an unchanged record.
+
+!!! note "`step` must be total"
+    `step` returns an outcome; it must not throw. An exception in `step` is a defect of the whole call, and every
+    caller in the batch sees it. A rejection, a "not attempted", a validation error are all values of `O`.
+
 ## Putting it together
 
 ```scala
