@@ -23,7 +23,7 @@ many batches run at once and how many inputs may wait, and gives each caller its
 [API](https://etacassiopeia.github.io/zio-ferry/api/).
 
 ```scala
-libraryDependencies += "io.github.etacassiopeia" %% "zio-ferry" % "0.1.0"
+libraryDependencies += "io.github.etacassiopeia" %% "zio-ferry" % "0.2.0"
 ```
 
 ```scala

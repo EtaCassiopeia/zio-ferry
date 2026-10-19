@@ -11,7 +11,7 @@
 Ferry is published to Maven Central:
 
 ```scala
-libraryDependencies += "io.github.etacassiopeia" %% "zio-ferry" % "0.1.0"
+libraryDependencies += "io.github.etacassiopeia" %% "zio-ferry" % "0.2.0"
 ```
 
 Its only dependency is ZIO itself. Versions follow early semver: before 1.0, a minor version may change the API.
