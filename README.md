@@ -38,7 +38,7 @@ For writes that must stay in order per entity, `Ferry.perKey` batches each key s
 flight per key. Idle keys are not batched at all; busy keys get batches that grow with load, sent in an
 [order](https://etacassiopeia.github.io/zio-ferry/guide/ordering/) of your choice. `FoldWrite` packages the fenced,
 idempotent "read once, apply, conditional write" call to pair it with, and `ProjectedWrite` the same followed by a
-fenced projection into a read-side view.
+fenced projection into a read-side view, per record or per entry.
 
 Every caller gets an answer, overload fails fast, and per-key order holds. This is checked by fault-injecting
 simulations, stress tests and TLA+ models with weakened variants that must fail.

@@ -20,3 +20,4 @@ mark them superseded; a changed decision gets a new record. Proposals not yet de
 | [0012](0012-fold-write-helper.md)       | Package "read once, apply, conditional write" as `FoldWrite`             | Accepted |
 | [0013](0013-rename-to-ferry.md)        | Rename BulkDike to Ferry                                                 | Accepted |
 | [0014](0014-commit-then-project.md)    | Package "commit, then project" as `ProjectedWrite`, marker in the store | Accepted |
+| [0015](0015-per-entry-projection.md)   | Project per entry: a projection may land for some entries, and `Committed` says why | Accepted |

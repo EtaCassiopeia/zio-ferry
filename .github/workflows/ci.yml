@@ -39,6 +39,7 @@ jobs:
           "++${{ matrix.scala-version }} examples/runMain ferry.examples.PricingAggregation"
           "++${{ matrix.scala-version }} examples/runMain ferry.examples.OrderedWrites"
           "++${{ matrix.scala-version }} examples/runMain ferry.examples.ProjectedWrites"
+          "++${{ matrix.scala-version }} examples/runMain ferry.examples.ProjectedRows"
 
   formal:
     runs-on: ubuntu-latest

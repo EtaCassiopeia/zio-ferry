@@ -51,4 +51,4 @@ The marker is part of the state the store holds and `read` returns. The library 
   `EarlyAnswer` variants must fail.
 - `FoldWrite`'s public API is unchanged; `ProjectedWrite` reuses its round trip.
 - Deferred until a store needs them: a projection that can land for some entries of one batch and not others, and the
-  projection's error carried on `Committed`.
+  projection's error carried on `Committed`. Built by [0015](0015-per-entry-projection.md).
