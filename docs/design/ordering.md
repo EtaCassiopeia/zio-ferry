@@ -463,6 +463,8 @@ under each built-in `Order` and check each trace against the kernel model.
 
 Out of scope, as application concerns: the store's placement of late inputs, idempotency and the fence (0005, a
 pattern), retries, membership and routing, two-phase or pending workflows, a durable log in front of the fleet.
+(Two-phase workflows: reversed by [0014](../decisions/0014-commit-then-project.md), which packages the
+commit-then-project shape as `ProjectedWrite`.)
 
 ### C.4 Migration
 

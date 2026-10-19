@@ -90,4 +90,5 @@ apply, conditional-write round trip.
 
 - [Dispatch order](ordering.md): send a key's inputs by effective date, timestamp or sequence number.
 - [Fenced writes with FoldWrite](fold-write.md): the write that makes retries and crashes safe.
+- [Commit, then project](projected-write.md): the same for a store that writes a projected view in a second step.
 - [Running on a fleet](../architecture/fleet.md): one writer per key across many processes.

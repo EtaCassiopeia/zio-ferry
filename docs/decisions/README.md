@@ -19,3 +19,4 @@ mark them superseded; a changed decision gets a new record. Proposals not yet de
 | [0011](0011-pluggable-dispatch-order.md) | A key's waiting inputs are sent in a pluggable order                    | Accepted |
 | [0012](0012-fold-write-helper.md)       | Package "read once, apply, conditional write" as `FoldWrite`             | Accepted |
 | [0013](0013-rename-to-ferry.md)        | Rename BulkDike to Ferry                                                 | Accepted |
+| [0014](0014-commit-then-project.md)    | Package "commit, then project" as `ProjectedWrite`, marker in the store | Accepted |

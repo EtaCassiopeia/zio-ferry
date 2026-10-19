@@ -24,6 +24,7 @@ flowchart TB
     CFG["FerryConfig / PerKeyConfig<br/>validated settings"]
     ORD["Order[I]<br/>rank of an input"]
     FW["FoldWrite<br/>read, apply, conditional write"]
+    PW["ProjectedWrite<br/>commit, then project; resume"]
     ERR["FerryError<br/>Rejected | Failed(e)"]
   end
   subgraph make ["Ferry.make / keyed"]
@@ -37,6 +38,8 @@ flowchart TB
   BD --> perkey
   ORD --> L
   FW -. "is a batch call for" .-> perkey
+  PW -. "commits with" .-> FW
+  PW -. "is a batch call for" .-> perkey
 ```
 
 | Source | Role |
@@ -48,6 +51,7 @@ flowchart TB
 | `Lanes.scala` | `perKey`'s pure waiting room: every scheduling decision |
 | `Order.scala` | Pluggable dispatch order |
 | `FoldWrite.scala` | The read, apply, conditional-write batch call |
+| `ProjectedWrite.scala` | The same, followed by a fenced projection that can be resumed from the store |
 
 ## Two kernels
 

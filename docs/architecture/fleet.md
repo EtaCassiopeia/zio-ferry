@@ -23,7 +23,9 @@ which must:
    whatever landed;
 5. **answer each caller only after the write is durable**.
 
-[`FoldWrite`](../guide/fold-write.md) is this round trip.
+[`FoldWrite`](../guide/fold-write.md) is this round trip. For a store that writes in two steps, a commit and then a
+projection of a read-side view, [`ProjectedWrite`](../guide/projected-write.md) adds the second, fenced write and a way
+to finish it from the store after a crash.
 
 ![The fence refuses a stale writer; deduplication answers a retry](../assets/fleet.svg)
 

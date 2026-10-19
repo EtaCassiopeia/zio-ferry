@@ -38,6 +38,7 @@ jobs:
           sbt "++${{ matrix.scala-version }} test"
           "++${{ matrix.scala-version }} examples/runMain ferry.examples.PricingAggregation"
           "++${{ matrix.scala-version }} examples/runMain ferry.examples.OrderedWrites"
+          "++${{ matrix.scala-version }} examples/runMain ferry.examples.ProjectedWrites"
 
   formal:
     runs-on: ubuntu-latest
