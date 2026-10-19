@@ -103,6 +103,8 @@ object OrderedWrites extends ZIOAppDefault:
           )
         }
         _ <- Console.printLine(s"$made write requests to the store, throttled ones included")
+        twice = written.collect { case (entity, log) if log.distinct != log => entity }
+        _ <- ZIO.fail(s"entries applied more than once: ${twice.mkString(", ")}").when(twice.nonEmpty)
       yield ()
     }
 

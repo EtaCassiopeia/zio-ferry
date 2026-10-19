@@ -142,15 +142,18 @@ object ProjectedWrites extends ZIOAppDefault:
           Entry(s"entry-$n", entity, amount = if n == 42 then 0 else n.toLong + 1)
         }
         results <- ZIO.foreachPar(entries)(entry => writer(entry).either)
-        answers   = results.map(describe)
         committed = results.count(_.exists(!_.isProjected))
         // Wait for the sweeper to finish what the writers could not.
-        _        <- (ZIO.sleep(10.millis) *> store.pendingEntities).repeatUntil(_.isEmpty)
+        _ <- (ZIO.sleep(10.millis) *> store.pendingEntities)
+          .repeatUntil(_.isEmpty)
+          .timeout(10.seconds)
+          .someOrElseZIO(store.pendingEntities.flatMap(left => ZIO.fail(s"still pending after 10 s: $left")))
         snapshot <- store.snapshot
         _        <- Console.printLine(
-          s"${entries.size} entries: ${answers.count(_.startsWith("stored"))} stored, " +
-            s"${answers.count(_.startsWith("rejected"))} rejected, ${answers.count(_.endsWith("retry"))} failed"
+          s"${entries.size} entries: ${results.count(_.exists(_.value.isRight))} stored, " +
+            s"${results.count(_.exists(_.value.isLeft))} rejected, ${results.count(_.isLeft)} failed"
         )
+        _ <- Console.printLine(s"entry-42 was told: ${describe(results(42))}")
         _ <- Console.printLine(s"$committed answered with their view pending, finished by the sweeper")
         _ <- ZIO.foreachDiscard(snapshot.toList.sortBy(_._1)) { case (entity, (record, view)) =>
           Console.printLine(
@@ -158,5 +161,9 @@ object ProjectedWrites extends ZIOAppDefault:
               s"view equals log: ${view == record.log}"
           )
         }
+        broken = snapshot.collect {
+          case (entity, (record, view)) if record.log.distinct != record.log || view != record.log => entity
+        }
+        _ <- ZIO.fail(s"views that do not equal their logs: ${broken.mkString(", ")}").when(broken.nonEmpty)
       yield ()
     }
