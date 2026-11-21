@@ -61,7 +61,7 @@ object Simulator:
   def run[E, A](program: ZIO[Any, E, A], decisions: Decisions, maxSteps: Long = 5_000_000L): Run[E, A] =
     val driver = Driver(decisions, Thread.currentThread())
     Unsafe.unsafe { implicit unsafe =>
-      val runtime = Runtime.unsafe.fromLayer(Runtime.setExecutor(driver) ++ Runtime.setBlockingExecutor(driver))
+      val runtime = zio.SimulatorRuntime.on(driver)
       val fiber   = runtime.unsafe.fork(current.locally(Some(driver))(ZIO.withClock(driver.clock)(program)))
       val exit    = driver.drive(() => fiber.unsafe.poll, maxSteps)
       Run(exit, driver.log.result(), driver.escapes.result(), driver.steps, Duration.fromNanos(driver.now))
