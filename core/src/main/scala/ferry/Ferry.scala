@@ -47,17 +47,9 @@ object Ferry:
   def make[R, E, I, B, A](config: FerryConfig)(call: NonEmptyChunk[I] => ZIO[R, E, B])(
     extract: (I, B) => A
   ): URIO[R & Scope, Ferry[I, E, A]] =
-    for
-      queue     <- Queue.dropping[Entry[I, E, A]](config.maxQueueing)
-      doorbell  <- Queue.sliding[Unit](1)
-      accepting <- Ref.Synchronized.make(true)
-      inFlight  <- Ref.make(0)
-      forming   <- Semaphore.make(1)
-      ferry = Live(config, call, extract, queue, doorbell, accepting, inFlight, forming)
-      // Finalizers run in reverse order: workers are interrupted first, then whatever is still queued is released.
-      _ <- ZIO.addFinalizer(ferry.close)
-      _ <- ZIO.foreachDiscard(1 to config.maxInFlightBatches)(_ => ferry.worker.forkScoped)
-    yield ferry
+    Engine.make(makeLimits(config), config.maxInFlightBatches, (_: I) => (), (_: I) => 1L, (_: I) => 0L)(
+      (_: Unit, inputs: NonEmptyChunk[I]) => call(inputs)
+    )(extract)
 
   /**
    * Creates a Ferry for the common case of a batch call answering with one result per distinct input.
@@ -111,107 +103,32 @@ object Ferry:
   )(
     call: (K, NonEmptyChunk[I]) => ZIO[R, E, B]
   )(extract: (I, B) => A): URIO[R & Scope, Ferry[I, E, A]] =
-    PerKeyFerry.make(config, key, weigh, order)(call)(extract)
+    Engine.make(perKeyLimits(config), config.maxInFlightBatches, key, weigh, order.rank)(call)(extract)
+
+  /**
+   * `Ferry.make` is the protocol for a single key, whose batches may run concurrently and are never called directly.
+   */
+  private[ferry] def makeLimits(config: FerryConfig): Protocol.Limits =
+    Protocol.Limits(
+      maxBatchSize = config.maxBatchSize,
+      maxBatchWeight = Long.MaxValue,
+      maxBatchDelayNanos = config.maxBatchDelay.toNanos,
+      maxQueueing = config.maxQueueing,
+      maxQueuedWeight = Long.MaxValue,
+      direct = false,
+      oneCallPerKey = false
+    )
+
+  private[ferry] def perKeyLimits(config: PerKeyConfig): Protocol.Limits =
+    Protocol.Limits(
+      maxBatchSize = config.maxBatchSize,
+      maxBatchWeight = config.maxBatchWeight,
+      maxBatchDelayNanos = config.maxBatchDelay.toNanos,
+      maxQueueing = config.maxQueueing,
+      maxQueuedWeight = config.maxQueuedWeight,
+      direct = config.directIdleKeys && config.maxBatchDelay.toNanos == 0L,
+      oneCallPerKey = true
+    )
 
   private def distinct[I](inputs: NonEmptyChunk[I]): NonEmptyChunk[I] =
     NonEmptyChunk.fromIterable(inputs.head, inputs.tail.distinct.filterNot(_ == inputs.head))
-
-  final private case class Entry[I, E, A](input: I, result: Promise[FerryError[E], A], submittedAt: Long)
-
-  private enum Admission:
-    case Admitted, QueueFull, Closed
-
-  final private class Live[R, E, I, B, A](
-    config: FerryConfig,
-    call: NonEmptyChunk[I] => ZIO[R, E, B],
-    extract: (I, B) => A,
-    queue: Queue[Entry[I, E, A]],
-    doorbell: Queue[Unit],
-    accepting: Ref.Synchronized[Boolean],
-    inFlight: Ref[Int],
-    forming: Semaphore
-  ) extends Ferry[I, E, A]:
-
-    override def apply(input: I): IO[FerryError[E], A] =
-      ZIO.uninterruptibleMask { restore =>
-        for
-          result      <- Promise.make[FerryError[E], A]
-          submittedAt <- Clock.nanoTime
-          _           <- enqueue(Entry(input, result, submittedAt))
-          a           <- restore(result.await).onInterrupt(result.interrupt)
-        yield a
-      }
-
-    override def metrics: UIO[Metrics] =
-      queue.size.zipWith(inFlight.get)(Metrics(_, _))
-
-    // Admission is serialised with `close` so nothing can enter the queue after it has been drained.
-    private def enqueue(entry: Entry[I, E, A]): IO[FerryError[E], Unit] =
-      accepting
-        .modifyZIO { isAccepting =>
-          if isAccepting then
-            queue.offer(entry).map(offered => (if offered then Admission.Admitted else Admission.QueueFull) -> true)
-          else ZIO.succeed(Admission.Closed -> false)
-        }
-        .flatMap {
-          case Admission.Admitted  => doorbell.offer(()).unit
-          case Admission.QueueFull => ZIO.fail(FerryError.Rejected)
-          case Admission.Closed    => ZIO.interrupt
-        }
-
-    def close: UIO[Unit] =
-      accepting.set(false) *> queue.takeAll.flatMap(ZIO.foreachDiscard(_)(_.result.interrupt))
-
-    /**
-     * Assembles and runs one batch at a time, forever. One worker runs per batch slot; `forming` lets only one of them
-     * assemble a batch at a time, so a worker that is busy running a batch never splits the next one.
-     */
-    def worker: URIO[R, Nothing] =
-      Ref
-        .make(Chunk.empty[Entry[I, E, A]])
-        .flatMap { taken =>
-          (forming.withPermit(assemble(taken)) flatMap run)
-            // An entry taken off the queue is owned by this worker until its result is set; never strand a caller.
-            .onInterrupt(taken.get.flatMap(ZIO.foreachDiscard(_)(_.result.interrupt)))
-        }
-        .forever
-
-    private def assemble(taken: Ref[Chunk[Entry[I, E, A]]]): UIO[NonEmptyChunk[Entry[I, E, A]]] =
-      ZIO
-        .uninterruptibleMask(restore => restore(queue.take).tap(first => taken.set(Chunk.single(first))))
-        .flatMap(first => fill(NonEmptyChunk.single(first), first.submittedAt + config.maxBatchDelay.toNanos, taken))
-
-    private def fill(
-      batch: NonEmptyChunk[Entry[I, E, A]],
-      deadline: Long,
-      taken: Ref[Chunk[Entry[I, E, A]]]
-    ): UIO[NonEmptyChunk[Entry[I, E, A]]] =
-      queue
-        .takeUpTo(config.maxBatchSize - batch.size)
-        .tap(more => taken.update(_ ++ more))
-        .uninterruptible
-        .flatMap { more =>
-          val grown = batch ++ more
-          if grown.size >= config.maxBatchSize then ZIO.succeed(grown)
-          else
-            Clock.nanoTime.flatMap { now =>
-              if now >= deadline then ZIO.succeed(grown)
-              // The doorbell rings on every admission; a stale ring only costs one extra empty `takeUpTo`.
-              else doorbell.take.timeout(Duration.fromNanos(deadline - now)) *> fill(grown, deadline, taken)
-            }
-        }
-
-    private def run(batch: NonEmptyChunk[Entry[I, E, A]]): URIO[R, Unit] =
-      // Callers interrupted while their input was waiting have already completed their promise.
-      ZIO.filterNot(batch)(_.result.isDone).map(NonEmptyChunk.fromChunk).flatMap {
-        case None          => ZIO.unit
-        case Some(entries) =>
-          ZIO.acquireReleaseWith(inFlight.update(_ + 1))(_ => inFlight.update(_ - 1)) { _ =>
-            call(entries.map(_.input)).exit.flatMap {
-              case Exit.Success(b) =>
-                ZIO.foreachDiscard(entries)(entry => entry.result.complete(ZIO.succeed(extract(entry.input, b))))
-              case Exit.Failure(cause) =>
-                ZIO.foreachDiscard(entries)(_.result.failCause(cause.map(FerryError.Failed(_))))
-            }
-          }
-      }

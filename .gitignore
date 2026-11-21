@@ -10,3 +10,5 @@ metals.sbt
 __pycache__/
 .venv/
 site/
+formal/states/
+formal/*_TTrace_*

@@ -30,9 +30,11 @@ object FerrySpec extends ZIOSpecDefault:
 
   /** Waits until `fiber` is parked, e.g. a caller whose input has been queued and is awaiting its result. */
   private def suspended(fiber: Fiber.Runtime[?, ?]): UIO[Unit] =
+    // A fiber that has not started yet also reports Suspended, with no trace: it must have run and then parked.
     fiber.status.repeatUntil {
-      case _: Fiber.Status.Suspended => true
-      case _                         => false
+      case Fiber.Status.Suspended(_, trace, _) => trace != Trace.empty
+      case Fiber.Status.Done                   => true
+      case _                                   => false
     }.unit
 
   private def metricsReach(ferry: Ferry[?, ?, ?])(p: Ferry.Metrics => Boolean): UIO[Unit] =
@@ -180,17 +182,21 @@ object FerrySpec extends ZIOSpecDefault:
       }
     ),
     suite("interruption and shutdown")(
-      test("leaves out the input of a caller interrupted before dispatch") {
+      test("leaves out the input of a caller interrupted before dispatch, which frees its place at once") {
         for
           rec     <- recorder
           cfg     <- config(maxBatchSize = 2)
           ferry   <- recordingFerry(cfg, rec)
           gone    <- ferry(1).fork
-          _       <- batchWaiting // 1 is in the batch being assembled
+          _       <- batchWaiting  // 1 is in a partial batch, waiting for its deadline
           _       <- gone.interrupt
-          result  <- ferry(2)     // fills the batch, which is dispatched without 1
+          second  <- ferry(2).fork // 1 has left: 2 starts a partial batch of its own
+          _       <- suspended(second)
+          early   <- rec.batches.get
+          _       <- TestClock.adjust(5.seconds)
+          result  <- second.join
           batches <- rec.batches.get
-        yield assertTrue(result == "result-2", batches == Chunk(Chunk(2)))
+        yield assertTrue(early.isEmpty, result == "result-2", batches == Chunk(Chunk(2)))
       },
       test("interrupts callers still waiting when the scope closes") {
         for

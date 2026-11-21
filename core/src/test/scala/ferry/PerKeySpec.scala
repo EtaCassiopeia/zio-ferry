@@ -42,9 +42,11 @@ object PerKeySpec extends ZIOSpecDefault:
 
   /** Waits until `fiber` is parked awaiting its result, or already done: either way, its input was admitted. */
   private def suspended(fiber: Fiber.Runtime[?, ?]): UIO[Unit] =
+    // A fiber that has not started yet also reports Suspended, with no trace: it must have run and then parked.
     fiber.status.repeatUntil {
-      case _: Fiber.Status.Running => false
-      case _                       => true
+      case Fiber.Status.Suspended(_, trace, _) => trace != Trace.empty
+      case Fiber.Status.Done                   => true
+      case _                                   => false
     }.unit
 
   private def metricsReach(ferry: Ferry[?, ?, ?])(p: Ferry.Metrics => Boolean): UIO[Unit] =
@@ -249,7 +251,7 @@ object PerKeySpec extends ZIOSpecDefault:
       }
     ),
     suite("interruption and shutdown")(
-      test("leaves out the input of a caller interrupted before dispatch") {
+      test("leaves out the input of a caller interrupted before dispatch, which frees its place at once") {
         for
           down    <- downstream
           cfg     <- config(maxBatchSize = 2, maxBatchDelay = 1.second)
@@ -257,7 +259,10 @@ object PerKeySpec extends ZIOSpecDefault:
           gone    <- d("k" -> 1).fork
           _       <- suspended(gone)
           _       <- gone.interrupt
-          result  <- d("k" -> 2)
+          second  <- d("k" -> 2).fork // 1 has left its lane: 2 starts a partial batch of its own
+          _       <- suspended(second)
+          _       <- TestClock.adjust(1.second)
+          result  <- second.join
           batches <- down.batches.get
         yield assertTrue(result == 2, batches == Chunk("k" -> Chunk(2)))
       },
