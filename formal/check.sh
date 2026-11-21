@@ -2,13 +2,11 @@
 # Model-checks the Ferry protocols with TLC. Each spec has one configuration that must pass, and weakened
 # variants that must FAIL: each variant removes one mechanism, and its failure proves that mechanism is needed.
 #
-#   Ferry.tla      Ferry.make: one queue, a forming lock, interruptible workers (safety and liveness)
-#     UnserialisedAdmission, NoCleanupOnInterrupt, NonAtomicTake      -> a caller is stranded
-#   PerKey.tla        Ferry.perKey: per-key lanes in rank order, one call in flight per key, idle keys called directly
-#                     (PerKey) or every input batched (PerKeyBatchOnly); safety and liveness
-#     PerKeyUnsorted      -> inputs waiting together are sent out of rank order
-#     PerKeyNoBusyGuard, PerKeyNoDirectGuard, PerKeyNoAwaitCall -> a key has two calls in flight
-#     PerKeyNonAtomicTake, PerKeyNonAtomicAdmission -> a caller is stranded
+#   Ferry.tla      the protocol of Ferry.make and Ferry.perKey, action for action as ferry.Protocol implements it
+#                  (safety and liveness): Ferry (perKey, idle keys called directly), FerryBatchOnly, FerryMake
+#     FerryUnsorted                          -> inputs waiting together are sent out of rank order
+#     FerryNoBusyGuard, FerryNoDirectGuard   -> a key has two calls in flight
+#     FerryNonAtomicAdmission, FerryNoDrain  -> a caller is stranded after close
 #   FencedWriter.tla  the single-writer-per-key deployment pattern, against a store with conditional appends
 #     FencedWriterUnfenced, FencedWriterNoDedup                         -> a command is applied twice
 #   ProjectedWriter.tla  the same pattern for a store that commits, then projects (ProjectedWrite); safety and liveness
@@ -52,14 +50,10 @@ fails() { # spec config [expected TLC message]
   echo "violated, as expected"
 }
 
-passes Ferry Ferry
-for variant in UnserialisedAdmission NoCleanupOnInterrupt NonAtomicTake; do fails Ferry "$variant"; done
-
-passes PerKey PerKey
-passes PerKey PerKeyBatchOnly
-for variant in PerKeyUnsorted PerKeyNoBusyGuard PerKeyNoDirectGuard PerKeyNoAwaitCall PerKeyNonAtomicTake PerKeyNonAtomicAdmission; do
-  fails PerKey "$variant"
-done
+for config in Ferry FerryBatchOnly FerryMake; do passes Ferry "$config"; done
+fails Ferry FerryUnsorted "Invariant InOrderPerKey is violated"
+for variant in FerryNoBusyGuard FerryNoDirectGuard; do fails Ferry "$variant" "Invariant OneInFlightPerKey is violated"; done
+for variant in FerryNonAtomicAdmission FerryNoDrain; do fails Ferry "$variant" "Invariant NoneStrandedAfterClose is violated"; done
 
 passes FencedWriter FencedWriter
 for variant in FencedWriterUnfenced FencedWriterNoDedup; do fails FencedWriter "$variant"; done

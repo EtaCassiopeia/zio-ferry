@@ -1,245 +1,339 @@
------------------------------- MODULE Ferry ------------------------------
+------------------------------- MODULE Ferry -------------------------------
 (***************************************************************************)
-(* The concurrency protocol of ferry.Ferry, at the granularity of   *)
-(* its atomic steps (Ref/Queue operations and uninterruptible regions).   *)
+(* The protocol behind ferry.Ferry.make and ferry.Ferry.perKey, action for *)
+(* action as implemented by ferry.Protocol: each action below is one       *)
+(* method of Protocol, applied by the shell in one STM transaction, and    *)
+(* both sides describe it with the same record, kept here in `act`.        *)
 (*                                                                         *)
-(* Callers submit inputs; workers, one per batch slot, take turns under a *)
-(* forming lock to assemble a batch from the queue, then run it and set   *)
-(* each caller's result. Callers may be interrupted while they wait.      *)
-(* Closing the scope interrupts every worker, then stops admission and     *)
-(* releases whatever is still queued.                                      *)
+(* Callers submit inputs for a key. Each key has a lane of waiting inputs  *)
+(* in ascending rank, ties in admission order. A lane is waiting for its   *)
+(* deadline, ready (in the ready line), or blocked (its key has a call in  *)
+(* flight and allows only one). Workers take the first ready lane's       *)
+(* longest prefix that fits a batch, call it, and complete it. With Direct,*)
+(* a caller whose key is idle claims it and sends its input itself.        *)
+(* Callers may give up while they wait. Closing the scope closes admission *)
+(* and empties every lane, after which workers take nothing more.          *)
 (*                                                                         *)
-(* Two switches weaken the protocol, to show each mechanism is needed:    *)
-(*   SerialisedAdmission - admission and "stop accepting" share a lock     *)
-(*   CleanupOnInterrupt  - an interrupted worker releases what it took     *)
-(*   AtomicTake          - taking entries off the queue and recording     *)
-(*                         them as owned is one uninterruptible step      *)
-(* The implementation has all three; turning any off strands a caller.   *)
+(* The model's free choices are only the environment's: arrivals (Submit), *)
+(* the passing of time (Due), the outcome of calls (Complete,              *)
+(* CompleteDirect), callers giving up (Cancel) and the scope closing       *)
+(* (Close). Which lane a worker takes and how much of it is decided as the *)
+(* code decides it. That is what lets a behaviour of this model be         *)
+(* replayed through the code, and a run of the code be checked against it. *)
+(*                                                                         *)
+(* Make (Ferry.make) is the case of one key, OneCallPerKey = FALSE and     *)
+(* Direct = FALSE.                                                         *)
+(*                                                                         *)
+(* Five switches weaken the protocol, to show each mechanism is needed:    *)
+(*   Sorted          - an input joins its lane in rank order, not at the   *)
+(*                     back                                                *)
+(*   BusyGuard       - a lane whose key has its one call in flight is      *)
+(*                     blocked                                             *)
+(*   DirectGuard     - only an idle key is claimed for a direct call       *)
+(*   AtomicAdmission - checking that admission is open and joining the     *)
+(*                     lane are one transaction                            *)
+(*   DrainOnClose    - closing empties every lane                          *)
+(* The implementation has all five.                                        *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets
 
-CONSTANTS Callers, Workers, MaxBatch, MaxQueue, SerialisedAdmission, CleanupOnInterrupt, AtomicTake
+CONSTANTS
+  Callers, Keys, Workers,
+  MaxBatch, MaxWeight, MaxQueue, MaxQueuedWeight,
+  Direct, OneCallPerKey,
+  RankOf, WeightOf,          \* each caller's rank and weight
+  Sorted, BusyGuard, DirectGuard, AtomicAdmission, DrainOnClose,
+  LowRank, Heavy             \* used only by MCRank and MCWeight, for model checking
 
-ASSUME MaxBatch >= 1 /\ MaxQueue >= MaxBatch
+ASSUME MaxBatch >= 1 /\ MaxQueue >= 1
 
 VARIABLES
-  caller,    \* where each caller is in `apply`
-  promise,   \* each caller's result
-  queue,     \* inputs waiting for a batch
-  accepting, \* admission is open
-  lock,      \* the forming lock: the worker assembling a batch, or Free
-  worker,    \* each worker's activity
-  taken,     \* entries a worker has taken off the queue and owns until its batch completes
-  batch,     \* entries of a worker's running batch whose result is not yet set
-  sent,      \* how many batch calls carried each caller's input
-  phase,     \* lifecycle of the enclosing scope
-  inHand     \* entries taken off the queue but not yet recorded in `taken` (only without AtomicTake)
+  caller,   \* how each caller's submission was received
+  answer,   \* each caller's answer: "none" until answered
+  lane,     \* each key's waiting inputs, in lane order
+  sched,    \* each key's lane: "none", "waiting", "ready" or "blocked"
+  ready,    \* the line of ready keys
+  busy,     \* calls in flight per key
+  batch,    \* each worker's batch (empty when idle)
+  wkey,     \* the key of each worker's batch
+  dkey,     \* the key of each direct caller's call in flight
+  open,     \* admission is open
+  pick,     \* the key a caller is joining, between check and join (only without AtomicAdmission)
+  admitted, \* history: each key's inputs in admission order
+  log,      \* history: each key's inputs in the order they were sent
+  gone,     \* history: the inputs of its key already sent when each caller was admitted
+  sent,     \* history: how many calls carried each caller's input
+  act       \* the action just taken, as a record: the shared event schema
 
-vars == <<caller, promise, queue, accepting, lock, worker, taken, batch, sent, phase, inHand>>
+vars == <<caller, answer, lane, sched, ready, busy, batch, wkey, dkey, open, pick, admitted, log, gone, sent, act>>
 
-Free == "free"
-Outcomes == {"succeeded", "failed"}
+NoKey == "none"
+Outcomes == {"Succeeded", "Failed", "Interrupted"}
+
+\* The names of the actions the code takes; the vocabulary shared with ferry.Protocol.Action.
+Vocabulary == {"Enqueue", "Claim", "Reject", "Refuse", "Due", "Take", "Complete", "CompleteDirect", "Cancel", "Close"}
+
+MCRank == [c \in Callers |-> IF c \in LowRank THEN 0 ELSE 1]
+MCWeight == [c \in Callers |-> IF c \in Heavy THEN 2 ELSE 1]
+
+Range(s) == {s[i] : i \in 1..Len(s)}
+RECURSIVE SumW(_)
+SumW(s) == IF s = <<>> THEN 0 ELSE WeightOf[Head(s)] + SumW(Tail(s))
+Queued == UNION {Range(lane[k]) : k \in Keys}
+QueuedWeight == LET RECURSIVE Sum(_) Sum(ks) == IF ks = {} THEN 0 ELSE LET k == CHOOSE x \in ks : TRUE IN SumW(lane[k]) + Sum(ks \ {k})
+                IN Sum(Keys)
+Pending == {c \in Callers : caller[c] \in {"queued", "direct"} /\ answer[c] = "none"}
+Idle(k) == lane[k] = <<>> /\ busy[k] = 0
+Blocked(k, b) == BusyGuard /\ OneCallPerKey /\ b[k] > 0
+Full(s) == Len(s) >= MaxBatch \/ SumW(s) >= MaxWeight
+Remove(s, x) == SelectSeq(s, LAMBDA y : y # x)
+
+(* `c` placed after every input of a rank up to its own. *)
+Insert(s, c) ==
+  IF Sorted
+  THEN SelectSeq(s, LAMBDA x : RankOf[x] <= RankOf[c]) \o <<c>> \o SelectSeq(s, LAMBDA x : RankOf[x] > RankOf[c])
+  ELSE Append(s, c)
+
+(* The longest prefix of `s` that fits a batch: at least one input, at most MaxBatch, within MaxWeight. *)
+RECURSIVE Prefix(_, _, _)
+Prefix(s, n, w) ==
+  IF n < Len(s) /\ n < MaxBatch /\ w + WeightOf[s[n + 1]] <= MaxWeight THEN Prefix(s, n + 1, w + WeightOf[s[n + 1]]) ELSE n
+BatchSize(s) == Prefix(s, 1, WeightOf[s[1]])
+
+(* Protocol.place: key `k`'s lane becomes `s`, given the calls in flight `b`; returns <<sched, ready>>. *)
+Place(k, s, b) ==
+  IF s = <<>> THEN <<"none", Remove(ready, k)>>
+  ELSE IF Blocked(k, b) THEN <<"blocked", Remove(ready, k)>>
+  ELSE IF sched[k] = "ready" THEN <<"ready", ready>>
+  ELSE IF sched[k] = "waiting" /\ ~Full(s) THEN <<"waiting", ready>>
+  ELSE IF Full(s) THEN <<"ready", Append(ready, k)>>
+  ELSE <<"waiting", ready>>
 
 TypeOK ==
-  /\ caller \in [Callers -> {"idle", "admitted", "waiting", "rejected", "refused"}]
-  /\ promise \in [Callers -> {"pending", "interrupted"} \cup Outcomes]
-  /\ queue \in Seq(Callers)
-  /\ accepting \in BOOLEAN
-  /\ lock \in Workers \cup {Free}
-  /\ worker \in [Workers -> {"idle", "assembling", "running", "dead"}]
-  /\ taken \in [Workers -> SUBSET Callers]
-  /\ batch \in [Workers -> SUBSET Callers]
-  /\ sent \in [Callers -> Nat]
-  /\ phase \in {"open", "closing", "stopped", "drained"}
-  /\ inHand \in [Workers -> SUBSET Callers]
+  /\ caller \in [Callers -> {"idle", "admitted", "queued", "direct", "rejected", "refused"}]
+  /\ answer \in [Callers -> {"none"} \cup Outcomes]
+  /\ lane \in [Keys -> Seq(Callers)]
+  /\ sched \in [Keys -> {"none", "waiting", "ready", "blocked"}]
+  /\ ready \in Seq(Keys)
+  /\ busy \in [Keys -> Nat]
+  /\ batch \in [Workers -> Seq(Callers)]
+  /\ wkey \in [Workers -> Keys \cup {NoKey}]
+  /\ dkey \in [Callers -> Keys \cup {NoKey}]
+  /\ open \in BOOLEAN
+  /\ act.name \in Vocabulary \cup {"Init", "Admit"}
 
 Init ==
   /\ caller = [c \in Callers |-> "idle"]
-  /\ promise = [c \in Callers |-> "pending"]
-  /\ queue = <<>>
-  /\ accepting = TRUE
-  /\ lock = Free
-  /\ worker = [w \in Workers |-> "idle"]
-  /\ taken = [w \in Workers |-> {}]
-  /\ batch = [w \in Workers |-> {}]
+  /\ answer = [c \in Callers |-> "none"]
+  /\ lane = [k \in Keys |-> <<>>]
+  /\ sched = [k \in Keys |-> "none"]
+  /\ ready = <<>>
+  /\ busy = [k \in Keys |-> 0]
+  /\ batch = [w \in Workers |-> <<>>]
+  /\ wkey = [w \in Workers |-> NoKey]
+  /\ dkey = [c \in Callers |-> NoKey]
+  /\ open = TRUE
+  /\ pick = [c \in Callers |-> NoKey]
+  /\ admitted = [k \in Keys |-> <<>>]
+  /\ log = [k \in Keys |-> <<>>]
+  /\ gone = [c \in Callers |-> {}]
   /\ sent = [c \in Callers |-> 0]
-  /\ phase = "open"
-  /\ inHand = [w \in Workers |-> {}]
+  /\ act = [name |-> "Init"]
 
-Interrupt(cs) == [c \in Callers |-> IF c \in cs /\ promise[c] = "pending" THEN "interrupted" ELSE promise[c]]
+Arrival(name, c, k) == [name |-> name, caller |-> c, key |-> k, weight |-> WeightOf[c], rank |-> RankOf[c]]
 
-Enqueue(c) ==
-  IF Len(queue) < MaxQueue
-  THEN /\ queue' = Append(queue, c)
-       /\ caller' = [caller EXCEPT ![c] = "waiting"]
+(* Protocol.submit, past the check that admission is open: claim an idle key, join its lane, or be rejected. *)
+Join(c, k) ==
+  LET ahead == Range(log[k]) IN
+  IF Direct /\ (DirectGuard => Idle(k))
+  THEN /\ caller' = [caller EXCEPT ![c] = "direct"]
+       /\ busy' = [busy EXCEPT ![k] = @ + 1]
+       /\ dkey' = [dkey EXCEPT ![c] = k]
+       /\ admitted' = [admitted EXCEPT ![k] = Append(@, c)]
+       /\ log' = [log EXCEPT ![k] = Append(@, c)]
+       /\ sent' = [sent EXCEPT ![c] = @ + 1]
+       /\ gone' = [gone EXCEPT ![c] = ahead]
+       /\ act' = Arrival("Claim", c, k)
+       /\ UNCHANGED <<lane, sched, ready>>
+  ELSE IF Cardinality(Queued) < MaxQueue /\ QueuedWeight + WeightOf[c] <= MaxQueuedWeight
+  THEN LET s == Insert(lane[k], c) IN
+       /\ caller' = [caller EXCEPT ![c] = "queued"]
+       /\ lane' = [lane EXCEPT ![k] = s]
+       /\ sched' = [sched EXCEPT ![k] = Place(k, s, busy)[1]]
+       /\ ready' = Place(k, s, busy)[2]
+       /\ admitted' = [admitted EXCEPT ![k] = Append(@, c)]
+       /\ gone' = [gone EXCEPT ![c] = ahead]
+       /\ act' = Arrival("Enqueue", c, k)
+       /\ UNCHANGED <<busy, dkey, log, sent>>
   ELSE /\ caller' = [caller EXCEPT ![c] = "rejected"]
-       /\ UNCHANGED queue
+       /\ act' = Arrival("Reject", c, k)
+       /\ UNCHANGED <<lane, sched, ready, busy, dkey, admitted, log, gone, sent>>
 
-(* `enqueue`: under the `accepting` lock, check and offer in one step. *)
-Submit(c) ==
+Submit(c, k) ==
   /\ caller[c] = "idle"
-  /\ IF ~accepting
-     THEN caller' = [caller EXCEPT ![c] = "refused"] /\ UNCHANGED queue
-     ELSE IF SerialisedAdmission
-          THEN Enqueue(c)
-          ELSE caller' = [caller EXCEPT ![c] = "admitted"] /\ UNCHANGED queue
-  /\ UNCHANGED <<promise, accepting, lock, worker, taken, batch, sent, phase, inHand>>
+  /\ IF ~open
+     THEN /\ caller' = [caller EXCEPT ![c] = "refused"]
+          /\ act' = Arrival("Refuse", c, k)
+          /\ UNCHANGED <<lane, sched, ready, busy, dkey, admitted, log, gone, sent, pick>>
+     ELSE IF AtomicAdmission
+          THEN Join(c, k) /\ UNCHANGED pick
+          ELSE /\ caller' = [caller EXCEPT ![c] = "admitted"]
+               /\ pick' = [pick EXCEPT ![c] = k]
+               /\ act' = [name |-> "Admit", caller |-> c, key |-> k]
+               /\ UNCHANGED <<lane, sched, ready, busy, dkey, admitted, log, gone, sent>>
+  /\ UNCHANGED <<answer, batch, wkey, open>>
 
-(* Only without SerialisedAdmission: the offer happens after, and apart from, the check. *)
-Offer(c) ==
+(* Only without AtomicAdmission: the caller joins after, and apart from, the check. *)
+Enter(c) ==
   /\ caller[c] = "admitted"
-  /\ Enqueue(c)
-  /\ UNCHANGED <<promise, accepting, lock, worker, taken, batch, sent, phase, inHand>>
+  /\ Join(c, pick[c])
+  /\ UNCHANGED <<answer, batch, wkey, open, pick>>
 
-(* The caller is interrupted while awaiting its result. *)
+(* Time passes: a waiting lane's deadline is due, and it joins the ready line. *)
+Due(k) ==
+  /\ sched[k] = "waiting"
+  /\ sched' = [sched EXCEPT ![k] = "ready"]
+  /\ ready' = Append(ready, k)
+  /\ act' = [name |-> "Due", key |-> k]
+  /\ UNCHANGED <<caller, answer, lane, busy, batch, wkey, dkey, open, pick, admitted, log, gone, sent>>
+
+(* Protocol.take: the first ready lane gives its longest fitting prefix; the key becomes busy. *)
+Take(w) ==
+  /\ open
+  /\ batch[w] = <<>>
+  /\ ready # <<>>
+  /\ LET k    == Head(ready)
+         n    == BatchSize(lane[k])
+         got  == SubSeq(lane[k], 1, n)
+         rest == SubSeq(lane[k], n + 1, Len(lane[k]))
+         b    == [busy EXCEPT ![k] = @ + 1]
+     IN  /\ batch' = [batch EXCEPT ![w] = got]
+         /\ wkey' = [wkey EXCEPT ![w] = k]
+         /\ busy' = b
+         /\ lane' = [lane EXCEPT ![k] = rest]
+         \* The lane leaves the line, then is placed afresh.
+         /\ LET placed == IF rest = <<>> THEN <<"none", Tail(ready)>>
+                          ELSE IF Blocked(k, b) THEN <<"blocked", Tail(ready)>>
+                          ELSE IF Full(rest) THEN <<"ready", Append(Tail(ready), k)>>
+                          ELSE <<"waiting", Tail(ready)>>
+            IN  /\ sched' = [sched EXCEPT ![k] = placed[1]]
+                /\ ready' = placed[2]
+         /\ log' = [log EXCEPT ![k] = @ \o got]
+         /\ sent' = [c \in Callers |-> IF c \in Range(got) THEN sent[c] + 1 ELSE sent[c]]
+         /\ act' = [name |-> "Take", worker |-> w, key |-> k, batch |-> got]
+  /\ UNCHANGED <<caller, answer, dkey, open, pick, admitted, gone>>
+
+(* A call for `k` is over: a lane blocked behind it goes back in line once the key is free. *)
+Free(k) ==
+  LET b == [busy EXCEPT ![k] = @ - 1] IN
+  /\ busy' = b
+  /\ IF sched[k] = "blocked" /\ ~Blocked(k, b)
+     THEN IF Full(lane[k])
+          THEN sched' = [sched EXCEPT ![k] = "ready"] /\ ready' = Append(ready, k)
+          ELSE sched' = [sched EXCEPT ![k] = "waiting"] /\ UNCHANGED ready
+     ELSE UNCHANGED <<sched, ready>>
+
+(* An outcome "Interrupted" comes only from the scope closing, which happens after admission closes, or, for a  *)
+(* direct call, from its caller giving up.                                                                       *)
+Outcome == IF open THEN {"Succeeded", "Failed"} ELSE Outcomes
+DirectOutcome(c) == IF open /\ c \in Pending THEN {"Succeeded", "Failed"} ELSE Outcomes
+
+(* Protocol.complete: the batch's pending callers are answered, and the key is freed. *)
+Complete(w) ==
+  /\ batch[w] # <<>>
+  /\ \E o \in [Range(batch[w]) -> Outcome] :
+       /\ answer' = [c \in Callers |-> IF c \in Range(batch[w]) /\ c \in Pending THEN o[c] ELSE answer[c]]
+       /\ act' = [name |-> "Complete", worker |-> w, outcomes |-> o]
+  /\ Free(wkey[w])
+  /\ batch' = [batch EXCEPT ![w] = <<>>]
+  /\ wkey' = [wkey EXCEPT ![w] = NoKey]
+  /\ UNCHANGED <<caller, lane, dkey, open, pick, admitted, log, gone, sent>>
+
+CompleteDirect(c) ==
+  /\ dkey[c] # NoKey
+  /\ \E o \in DirectOutcome(c) :
+       /\ answer' = IF c \in Pending THEN [answer EXCEPT ![c] = o] ELSE answer
+       /\ act' = [name |-> "CompleteDirect", caller |-> c, outcome |-> o]
+  /\ Free(dkey[c])
+  /\ dkey' = [dkey EXCEPT ![c] = NoKey]
+  /\ UNCHANGED <<caller, lane, batch, wkey, open, pick, admitted, log, gone, sent>>
+
+(* Protocol.cancel: a pending caller gives up; if its input still waits, it leaves the lane at once. *)
 Cancel(c) ==
-  /\ caller[c] = "waiting"
-  /\ promise[c] = "pending"
-  /\ promise' = [promise EXCEPT ![c] = "interrupted"]
-  /\ UNCHANGED <<caller, queue, accepting, lock, worker, taken, batch, sent, phase, inHand>>
+  /\ c \in Pending
+  /\ answer' = [answer EXCEPT ![c] = "Interrupted"]
+  /\ IF \E k \in Keys : c \in Range(lane[k])
+     THEN LET k == CHOOSE x \in Keys : c \in Range(lane[x])
+              s == Remove(lane[k], c)
+          IN  /\ lane' = [lane EXCEPT ![k] = s]
+              /\ sched' = [sched EXCEPT ![k] = Place(k, s, busy)[1]]
+              /\ ready' = Place(k, s, busy)[2]
+     ELSE UNCHANGED <<lane, sched, ready>>
+  /\ act' = [name |-> "Cancel", caller |-> c]
+  /\ UNCHANGED <<caller, busy, batch, wkey, dkey, open, pick, admitted, log, gone, sent>>
 
-Alive(w) == worker[w] # "dead"
-
-(* `assemble`: take the forming lock, then the first entry (recorded in `taken` uninterruptibly). *)
-TakeFirst(w) ==
-  /\ worker[w] = "idle"
-  /\ lock = Free
-  /\ queue # <<>>
-  /\ lock' = w
-  /\ taken' = [taken EXCEPT ![w] = {Head(queue)}]
-  /\ queue' = Tail(queue)
-  /\ worker' = [worker EXCEPT ![w] = "assembling"]
-  /\ UNCHANGED <<caller, promise, accepting, batch, sent, phase, inHand>>
-
-(* `fill`: `takeUpTo` the room left in the batch, recorded in `taken` in the same uninterruptible step. *)
-Fill(w) ==
-  /\ worker[w] = "assembling"
-  /\ Cardinality(taken[w]) < MaxBatch
-  /\ queue # <<>>
-  /\ LET room == MaxBatch - Cardinality(taken[w])
-         n    == IF Len(queue) < room THEN Len(queue) ELSE room
-         got  == {queue[i] : i \in 1..n}
-     IN  /\ queue' = SubSeq(queue, n + 1, Len(queue))
-         /\ IF AtomicTake
-            THEN taken' = [taken EXCEPT ![w] = @ \cup got] /\ UNCHANGED inHand
-            ELSE inHand' = [inHand EXCEPT ![w] = @ \cup got] /\ UNCHANGED taken
-  /\ inHand[w] = {}
-  /\ UNCHANGED <<caller, promise, accepting, lock, worker, batch, sent, phase>>
-
-(* Only without AtomicTake: the entries just taken are recorded as owned, in a later step. *)
-Record(w) ==
-  /\ inHand[w] # {}
-  /\ taken' = [taken EXCEPT ![w] = @ \cup inHand[w]]
-  /\ inHand' = [inHand EXCEPT ![w] = {}]
-  /\ UNCHANGED <<caller, promise, queue, accepting, lock, worker, batch, sent, phase>>
-
-(* The batch is full or its deadline passed (time is abstracted: a deadline may pass at any moment). *)
-(* `run` leaves out callers that were interrupted while waiting.                                     *)
-Dispatch(w) ==
-  /\ worker[w] = "assembling"
-  /\ inHand[w] = {}
-  /\ lock' = Free
-  /\ LET live == {c \in taken[w] : promise[c] = "pending"} IN
-       IF live = {}
-       THEN /\ worker' = [worker EXCEPT ![w] = "idle"]
-            /\ taken' = [taken EXCEPT ![w] = {}]
-            /\ UNCHANGED <<batch, sent>>
-       ELSE /\ worker' = [worker EXCEPT ![w] = "running"]
-            /\ batch' = [batch EXCEPT ![w] = live]
-            /\ sent' = [c \in Callers |-> IF c \in live THEN sent[c] + 1 ELSE sent[c]]
-            /\ UNCHANGED taken
-  /\ UNCHANGED <<caller, promise, queue, accepting, phase, inHand>>
-
-(* The batch call has returned: results are set one caller at a time, interruptibly. *)
-Complete(w, c) ==
-  /\ worker[w] = "running"
-  /\ c \in batch[w]
-  /\ \E outcome \in Outcomes :
-       promise' = [promise EXCEPT ![c] = IF @ = "pending" THEN outcome ELSE @]
-  /\ batch' = [batch EXCEPT ![w] = @ \ {c}]
-  /\ UNCHANGED <<caller, queue, accepting, lock, worker, taken, sent, phase, inHand>>
-
-Finish(w) ==
-  /\ worker[w] = "running"
-  /\ batch[w] = {}
-  /\ worker' = [worker EXCEPT ![w] = "idle"]
-  /\ taken' = [taken EXCEPT ![w] = {}]
-  /\ UNCHANGED <<caller, promise, queue, accepting, lock, batch, sent, phase, inHand>>
-
-(* The enclosing scope starts closing. *)
-BeginClose ==
-  /\ phase = "open"
-  /\ phase' = "closing"
-  /\ UNCHANGED <<caller, promise, queue, accepting, lock, worker, taken, batch, sent, inHand>>
-
-(* Scope finalizer, part 1: interrupt each worker; its `onInterrupt` releases what it took. *)
-KillWorker(w) ==
-  /\ phase = "closing"
-  /\ Alive(w)
-  /\ worker' = [worker EXCEPT ![w] = "dead"]
-  /\ promise' = IF CleanupOnInterrupt THEN Interrupt(taken[w]) ELSE promise
-  /\ lock' = IF lock = w THEN Free ELSE lock
-  /\ taken' = [taken EXCEPT ![w] = {}]
-  /\ batch' = [batch EXCEPT ![w] = {}]
-  /\ inHand' = [inHand EXCEPT ![w] = {}] \* never recorded, so nobody releases them
-  /\ UNCHANGED <<caller, queue, accepting, sent, phase>>
-
-(* Scope finalizer, part 2 (`close`): stop admission, under the same lock as `enqueue`... *)
-StopAccepting ==
-  /\ phase = "closing"
-  /\ \A w \in Workers : ~Alive(w)
-  /\ accepting' = FALSE
-  /\ phase' = "stopped"
-  /\ UNCHANGED <<caller, promise, queue, lock, worker, taken, batch, sent, inHand>>
-
-(* ...then release every caller still queued. *)
-Drain ==
-  /\ phase = "stopped"
-  /\ promise' = Interrupt({queue[i] : i \in 1..Len(queue)})
-  /\ queue' = <<>>
-  /\ phase' = "drained"
-  /\ UNCHANGED <<caller, accepting, lock, worker, taken, batch, sent, inHand>>
-
-WorkerStep(w) == TakeFirst(w) \/ Fill(w) \/ Record(w) \/ Dispatch(w) \/ Finish(w) \/ \E c \in Callers : Complete(w, c)
+(* Protocol.close: admission closes and every waiting input leaves its lane; its caller is interrupted. *)
+Close ==
+  /\ open
+  /\ open' = FALSE
+  /\ IF DrainOnClose
+     THEN /\ answer' = [c \in Callers |-> IF c \in Queued THEN "Interrupted" ELSE answer[c]]
+          /\ lane' = [k \in Keys |-> <<>>]
+          /\ sched' = [k \in Keys |-> "none"]
+          /\ ready' = <<>>
+          /\ act' = [name |-> "Close", drained |-> Queued]
+     ELSE /\ act' = [name |-> "Close", drained |-> {}]
+          /\ UNCHANGED <<answer, lane, sched, ready>>
+  /\ UNCHANGED <<caller, busy, batch, wkey, dkey, pick, admitted, log, gone, sent>>
 
 Next ==
-  \/ \E c \in Callers : Submit(c) \/ Offer(c) \/ Cancel(c)
-  \/ \E w \in Workers : WorkerStep(w) \/ KillWorker(w)
-  \/ BeginClose \/ StopAccepting \/ Drain
+  \/ \E c \in Callers : \/ \E k \in Keys : Submit(c, k)
+                        \/ Enter(c) \/ CompleteDirect(c) \/ Cancel(c)
+  \/ \E k \in Keys : Due(k)
+  \/ \E w \in Workers : Take(w) \/ Complete(w)
+  \/ Close
 
-(* Callers, cancellation and closing happen whenever they happen; the runtime keeps workers and finalizers going. *)
+(* Time passes, workers take and calls return; arrivals, giving up and closing need not happen. *)
 Fairness ==
-  /\ \A w \in Workers : WF_vars(WorkerStep(w)) /\ WF_vars(KillWorker(w))
-  /\ \A c \in Callers : WF_vars(Offer(c))
-  /\ WF_vars(StopAccepting) /\ WF_vars(Drain)
+  /\ \A k \in Keys : WF_vars(Due(k))
+  /\ \A w \in Workers : WF_vars(Take(w)) /\ WF_vars(Complete(w))
+  /\ \A c \in Callers : WF_vars(CompleteDirect(c)) /\ WF_vars(Enter(c))
 
 Spec == Init /\ [][Next]_vars /\ Fairness
 
 -----------------------------------------------------------------------------
 (* Safety *)
 
-(* No input is ever sent in more than one batch call. *)
+(* A key never has two calls in flight, batched or direct. *)
+OneInFlightPerKey ==
+  OneCallPerKey =>
+    \A k \in Keys :
+      Cardinality({w \in Workers : wkey[w] = k}) + Cardinality({c \in Callers : dkey[c] = k}) <= 1
+
+(* Each key's inputs are sent in rank order, ties in admission order, except that an input admitted once another had *)
+(* already been sent (a late low rank) may follow it whatever its rank.                                             *)
+Before(s, a, b) == \E i, j \in 1..Len(s) : i < j /\ s[i] = a /\ s[j] = b
+Precedes(k, a, b) == RankOf[a] < RankOf[b] \/ (RankOf[a] = RankOf[b] /\ Before(admitted[k], a, b))
+InOrderPerKey ==
+  \A k \in Keys : \A a, b \in Range(log[k]) : Before(log[k], a, b) => Precedes(k, a, b) \/ a \in gone[b]
+
 AtMostOnce == \A c \in Callers : sent[c] <= 1
 
-(* A rejected or refused input is never sent. *)
 TurnedAwayNeverSent == \A c \in Callers : caller[c] \in {"rejected", "refused"} => sent[c] = 0
 
-(* Only one batch is assembled at a time, by the lock holder. *)
-OneAssembler == \A w \in Workers : worker[w] = "assembling" <=> lock = w
+BatchBounded ==
+  \A w \in Workers : Len(batch[w]) <= MaxBatch /\ (Len(batch[w]) > 1 => SumW(batch[w]) <= MaxWeight)
 
-BatchBounded == \A w \in Workers : Cardinality(taken[w]) <= MaxBatch
+QueueBounded == Cardinality(Queued) <= MaxQueue /\ QueuedWeight <= MaxQueuedWeight
 
-(* An input is either queued, owned by one worker, or neither. *)
-SingleOwner ==
-  /\ \A w1, w2 \in Workers : w1 # w2 => taken[w1] \cap taken[w2] = {}
-  /\ \A w \in Workers, i \in 1..Len(queue) : queue[i] \notin taken[w]
-
-(* Once the scope has fully closed, nobody is left waiting for a result that will never come. *)
+(* Once admission has closed, every caller still pending has its input in a call, which will answer it. *)
 NoneStrandedAfterClose ==
-  phase = "drained" => \A c \in Callers : caller[c] = "waiting" => promise[c] # "pending"
+  ~open => \A c \in Pending : (\E w \in Workers : c \in Range(batch[w])) \/ dkey[c] # NoKey
 
-Safety == AtMostOnce /\ TurnedAwayNeverSent /\ OneAssembler /\ BatchBounded /\ SingleOwner /\ NoneStrandedAfterClose
+Safety ==
+  /\ OneInFlightPerKey /\ InOrderPerKey /\ AtMostOnce /\ TurnedAwayNeverSent
+  /\ BatchBounded /\ QueueBounded /\ NoneStrandedAfterClose
 
-(* Liveness: every caller that was let in eventually gets a result, is told it failed, or is interrupted. *)
-EveryCallerAnswered == \A c \in Callers : (caller[c] = "waiting") ~> (promise[c] # "pending")
+(* Liveness: every caller that was let in is eventually answered. *)
+EveryCallerAnswered == \A c \in Callers : (caller[c] \in {"queued", "direct"}) ~> (answer[c] # "none")
 =============================================================================
