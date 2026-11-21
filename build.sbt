@@ -27,14 +27,29 @@ inThisBuild(
 
 lazy val root = project
   .in(file("."))
-  .aggregate(core, examples)
+  .aggregate(testkit, core, examples)
   .settings(
     name           := "zio-ferry-root",
     publish / skip := true
   )
 
+// Deterministic simulation and TLA+ conformance tooling. Generic: nothing in it knows about Ferry.
+lazy val testkit = project
+  .in(file("testkit"))
+  .settings(
+    name           := "zio-ferry-testkit",
+    publish / skip := true,
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio"          % zioVersion,
+      "dev.zio" %% "zio-test"     % zioVersion % Test,
+      "dev.zio" %% "zio-test-sbt" % zioVersion % Test
+    ),
+    testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
+  )
+
 lazy val core = project
   .in(file("core"))
+  .dependsOn(testkit % Test)
   .settings(
     name := "zio-ferry",
     libraryDependencies ++= Seq(
