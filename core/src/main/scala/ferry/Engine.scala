@@ -11,11 +11,14 @@ import ferry.Protocol.{Admission, Outcome}
  * The ZIO shell around [[Protocol]], shared by [[Ferry.make]] and [[Ferry.perKey]].
  *
  * The rule it follows: '''every change to the protocol's state is one STM transaction that applies one protocol step,
- * answers the callers that step settles, and records the step's actions'''. Nothing else touches the state. The
- * application's functions (`call`, `key`, `weigh`, `rank`, `extract`) run outside transactions, which may retry.
+ * and records the step's actions'''. Nothing else touches the state. The callers a step answers are answered right
+ * after it commits, in the order the step lists them: the transaction decides who is answered and how, the shell
+ * delivers it. (Answering from inside the transaction, through `TPromise`s, would wake the callers in an order ZIO's
+ * STM derives from identity hashes, and no two runs of the same program would then be alike.) The application's
+ * functions (`call`, `key`, `weigh`, `rank`, `extract`) run outside transactions, which may retry.
  *
  * Fibers:
- *   - '''callers''' submit, then wait for their answer, a `TPromise`; a caller interrupted while it waits cancels;
+ *   - '''callers''' submit, then wait for their answer, a `Promise`; a caller interrupted while it waits cancels;
  *   - '''workers''', one per batch slot, take a batch, run it and complete it, forever;
  *   - '''direct calls''', one per claimed idle key, run the caller's input on its own and complete it.
  *
@@ -24,7 +27,7 @@ import ferry.Protocol.{Admission, Outcome}
  */
 private[ferry] object Engine:
 
-  final case class Entry[I, E, A](input: I, answer: TPromise[Nothing, Exit[FerryError[E], A]])
+  final case class Entry[I, E, A](input: I, answer: Promise[Nothing, Exit[FerryError[E], A]])
 
   /**
    * The steps the shell applies. The standard rules are the protocol's own; tests substitute deliberately wrong rules
@@ -111,7 +114,7 @@ private[ferry] object Engine:
           k      <- ZIO.succeed(key(input))
           r      <- ZIO.succeed(rank(input))
           w      <- ZIO.succeed(weigh(input) max 0L)
-          answer <- TPromise.make[Nothing, Answer].commit
+          answer <- Promise.make[Nothing, Answer]
           now    <- Clock.nanoTime
           a      <- step(rules.submit(_, k, Entry(input, answer), w, r, now)).commit.flatMap {
             case Admission.Refused(_)  => ZIO.interrupt
@@ -128,40 +131,40 @@ private[ferry] object Engine:
 
     private def await(
       caller: Long,
-      answer: TPromise[Nothing, Answer],
+      answer: Promise[Nothing, Answer],
       restore: ZIO.InterruptibilityRestorer,
       stop: UIO[Unit]
     ): IO[FerryError[E], A] =
-      restore(answer.await.commit).onInterrupt(cancel(caller) *> stop).flatMap(exit => exit)
+      restore(answer.await).onInterrupt(cancel(caller) *> stop).flatMap(exit => exit)
 
     private def cancel(caller: Long): UIO[Unit] =
-      stepIfEnabled(rules.cancel(_, caller)).flatMap {
+      stepIfEnabled(rules.cancel(_, caller)).commit.flatMap {
         case Some(entry) => entry.answer.succeed(interruptedAnswer).unit
-        case None        => STM.unit
-      }.commit
+        case None        => ZIO.unit
+      }
 
     override def metrics: UIO[Ferry.Metrics] =
       state.get.map(p => Ferry.Metrics(p.queued, p.inFlight)).commit
 
     def close: UIO[Unit] =
-      stepIfEnabled(rules.close).flatMap {
-        case Some(drained) => STM.foreachDiscard(drained)(_.answer.succeed(interruptedAnswer))
-        case None          => STM.unit
-      }.commit
+      stepIfEnabled(rules.close).commit.flatMap {
+        case Some(drained) => ZIO.foreachDiscard(drained)(_.answer.succeed(interruptedAnswer))
+        case None          => ZIO.unit
+      }
 
     /**
      * Sends a claimed idle key's input on its own, and completes it. Forked uninterruptible: only the call is not. The
      * call is interrupted when the scope closes, or when its caller gives up.
      */
-    private def sendDirect(caller: Long, k: K, input: I, answer: TPromise[Nothing, Answer]): UIO[Unit] =
+    private def sendDirect(caller: Long, k: K, input: I, answer: Promise[Nothing, Answer]): UIO[Unit] =
       // Forked from the caller's uninterruptible region, whose status it inherits: only the call is made interruptible.
       call(k, NonEmptyChunk.single(input)).interruptible.exit.flatMap { exit =>
         interrupted.flatMap { wasInterrupted =>
           val result = answerOf(input, exit, wasInterrupted)
-          stepIfEnabled(rules.completeDirect(_, caller, outcomeOf(result, wasInterrupted))).flatMap {
+          stepIfEnabled(rules.completeDirect(_, caller, outcomeOf(result, wasInterrupted))).commit.flatMap {
             case Some(Some(_)) => answer.succeed(result).unit
-            case _             => STM.unit
-          }.commit
+            case _             => ZIO.unit
+          }
         }
       }
 
@@ -198,10 +201,10 @@ private[ferry] object Engine:
     private def complete(id: Int, batch: NonEmptyChunk[Protocol.Item[X]], exit: Exit[E, B]): UIO[Unit] =
       interrupted.flatMap { wasInterrupted =>
         val answers = batch.map(item => item.caller -> answerOf(item.value.input, exit, wasInterrupted)).toMap
-        stepIfEnabled(rules.complete(_, id, caller => outcomeOf(answers(caller), wasInterrupted))).flatMap {
-          case Some(answered) => STM.foreachDiscard(answered)((caller, entry) => entry.answer.succeed(answers(caller)))
-          case None           => STM.unit
-        }.commit
+        stepIfEnabled(rules.complete(_, id, caller => outcomeOf(answers(caller), wasInterrupted))).commit.flatMap {
+          case Some(answered) => ZIO.foreachDiscard(answered)((caller, entry) => entry.answer.succeed(answers(caller)))
+          case None           => ZIO.unit
+        }
       }
 
     private val interrupted: UIO[Boolean] = ZIO.descriptorWith(d => ZIO.succeed(d.interrupters.nonEmpty))
