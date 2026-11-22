@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import scala.collection.immutable.ListMap
-import scala.jdk.CollectionConverters.*
 
 /**
  * Checks a recorded run of the code against a TLA+ spec (trace validation, after Cirstea, Kuppe, Loillier and Merz,
@@ -76,16 +75,15 @@ object TraceValidation:
 
   /**
    * Checks `trace` against `companion`, a module in `formal`. The check runs in a scratch directory holding a copy of
-   * every module in `formal`, so concurrent checks never share files and nothing is left in the repository.
+   * every module in `formal`, so concurrent checks never share files and nothing is left in the repository. `alter`
+   * changes the copied modules: a deliberately drifted model, to show that drift is caught.
    */
-  def check(formal: Path, companion: String, trace: Trace): Tlc.Verdict =
+  def check(formal: Path, companion: String, trace: Trace, alter: Alter = Alter.none): Tlc.Verdict =
     if Tlc.jar.isEmpty then Tlc.Verdict.Skipped("TLC not found: set TLA2TOOLS or put tla2tools.jar at the root")
     else
       val scratch = Files.createTempDirectory("trace-validation")
       try
-        Files.list(formal).iterator().asScala.filter(_.toString.endsWith(".tla")).foreach { spec =>
-          Files.copy(spec, scratch.resolve(spec.getFileName))
-        }
+        Alter.copy(formal, scratch, alter)
         val (module, config) = write(scratch, companion, trace)
         verdict(Tlc.run(scratch, module.getFileName.toString, config.getFileName.toString, Seq("-deadlock")))
       finally Tlc.deleteRecursively(scratch)
