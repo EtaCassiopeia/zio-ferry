@@ -217,20 +217,29 @@ final private[ferry] case class Protocol[K, X](
     val others = waiting.getOrElse(deadline, Vector.empty).filterNot(_ == key)
     copy(waiting = if others.isEmpty then waiting - deadline else waiting.updated(deadline, others))
 
+  /**
+   * The deadline of `key`'s waiting lane has passed: the lane joins the ready line. `None` if the lane is not waiting.
+   * [[take]] applies it to every lane due by its `now`; it is a step of its own because, in the model, the passing of
+   * time is an event of the environment, which a replay of the model's behaviours applies when the model does.
+   */
+  def due(key: K): Option[Step[K, X, Unit]] =
+    lanes.get(key).collect { case lane @ Lane(_, _, Schedule.Waiting(deadline)) =>
+      Step(
+        (),
+        unwait(key, deadline).copy(
+          lanes = lanes.updated(key, lane.copy(schedule = Schedule.Ready)),
+          ready = ready :+ key
+        ),
+        Chunk.single(Action.Due(key))
+      )
+    }
+
   /** Every lane whose deadline is due by `now` joins the ready line, earliest deadline first. */
   private def promote(now: Long): (Protocol[K, X], Chunk[Action[K]]) =
-    val due = waiting.rangeTo(now)
-    if due.isEmpty then (this, Chunk.empty)
-    else
-      val keys = Chunk.fromIterable(due.values.flatten)
-      (
-        copy(
-          lanes = keys.foldLeft(lanes)((acc, key) => acc.updated(key, acc(key).copy(schedule = Schedule.Ready))),
-          ready = ready ++ keys,
-          waiting = waiting -- due.keys
-        ),
-        keys.map(Action.Due(_))
-      )
+    waiting.rangeTo(now).values.flatten.foldLeft((this, Chunk.empty[Action[K]])) { case ((p, actions), key) =>
+      val s = p.due(key).get
+      (s.next, actions ++ s.actions)
+    }
 
 object Protocol:
 
