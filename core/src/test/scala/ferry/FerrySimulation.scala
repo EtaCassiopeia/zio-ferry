@@ -3,6 +3,7 @@ package ferry
 import scala.util.Random
 
 import zio.*
+import zio.stm.*
 
 import ferry.Protocol.Action
 import ferry.testkit.sim.{Decisions, Simulator}
@@ -35,13 +36,27 @@ object FerrySimulation:
     closeAfterMs: Option[Int]
   )
 
-  /** What one run did: every caller's answer, every call made, and the recorded protocol trace. */
+  /** An action the run took, with the simulator's step and virtual time (nanoseconds) when it took it. */
+  final case class Event(step: Long, at: Long, action: Action[String])
+
+  /** A recorder that also notes where in the simulation each action was taken, for timelines. */
+  final class TimedRecorder(log: TRef[Chunk[Event]]) extends Recorder[String]:
+    def record(actions: Chunk[Action[String]]): USTM[Unit] =
+      log.update { events =>
+        val (step, at) = Simulator.position().getOrElse((0L, 0L))
+        events ++ actions.map(Event(step, at, _))
+      }
+    def timeline: UIO[Chunk[Event]] = log.get.commit
+
+  /** What one run did: every caller's answer, every call made, and the recorded protocol trace, with times. */
   final case class Observation(
     answers: Map[Int, Exit[FerryError[String], Int]],
     calls: Chunk[(String, Chunk[Int])],
     overlapping: Set[String],
-    trace: Chunk[Action[String]]
+    timeline: Chunk[Event]
   ):
+    def trace: Chunk[Action[String]] = timeline.map(_.action)
+
     def recorded(s: Scenario): Conformance.Recorded[String] = Conformance.Recorded(s.limits, s.workers, trace, identity)
 
     /**
@@ -115,7 +130,7 @@ object FerrySimulation:
   /** The run itself. Calls take a latency and an outcome chosen by the simulator. */
   def program(s: Scenario, rules: Engine.Rules = Engine.Rules.standard): UIO[Observation] =
     for
-      recorder <- Recorder.inMemory[String]
+      recorder <- TRef.make(Chunk.empty[Event]).commit.map(TimedRecorder(_))
       calls    <- Ref.make(Chunk.empty[(String, Chunk[Int])])
       inFlight <- Ref.make(Map.empty[String, Int])
       overlap  <- Ref.make(Set.empty[String])
@@ -155,8 +170,8 @@ object FerrySimulation:
       _       <- scope.close(Exit.unit)
       sent    <- calls.get
       both    <- overlap.get
-      trace   <- recorder.trace
-    yield Observation(answers.toMap, sent, both, trace)
+      events  <- recorder.timeline
+    yield Observation(answers.toMap, sent, both, events)
 
   final case class Result(scenario: Scenario, run: Simulator.Run[Nothing, Observation]):
     def observation: Option[Observation] = run.exit.flatMap(_.toEither.toOption)

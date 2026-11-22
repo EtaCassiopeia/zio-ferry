@@ -54,12 +54,24 @@ object Simulator:
 
   private val current: FiberRef[Option[Driver]] = Unsafe.unsafe(FiberRef.unsafe.make(Option.empty[Driver]))
 
+  private val driving = ThreadLocal[Driver]()
+
+  /**
+   * The virtual time, in nanoseconds, of the simulation driven by the current thread; `None` outside a simulation. For
+   * code that cannot run an effect, such as a recorder called inside an STM transaction, to stamp what it records.
+   */
+  def virtualNanos(): Option[Long] = Option(driving.get()).map(_.now)
+
+  /** The scheduling step the current thread's simulation is at, and its virtual time: where an event happened. */
+  def position(): Option[(Long, Long)] = Option(driving.get()).map(d => (d.steps, d.now))
+
   /**
    * Runs `program` to completion, or until it hangs or takes `maxSteps` steps (reported as hung), taking every decision
    * from `decisions`.
    */
   def run[E, A](program: ZIO[Any, E, A], decisions: Decisions, maxSteps: Long = 5_000_000L): Run[E, A] =
     val driver = Driver(decisions, Thread.currentThread())
+    driving.set(driver)
     Unsafe.unsafe { implicit unsafe =>
       val runtime = zio.SimulatorRuntime.on(driver)
       val fiber   = runtime.unsafe.fork(current.locally(Some(driver))(ZIO.withClock(driver.clock)(program)))
@@ -80,9 +92,9 @@ object Simulator:
     val log         = Chunk.newBuilder[Decision]
     val escapes     = Chunk.newBuilder[String]
 
-    def choose(point: String, options: Int): Int =
+    def choose(point: String, options: Int, chose: Int => String = i => s"option $i"): Int =
       val took = decisions.choose(point, options)
-      log += Decision(point, options, took)
+      log += Decision(point, options, took, steps, now, chose(took))
       took
 
     override def metrics(implicit unsafe: Unsafe): Option[zio.internal.ExecutionMetrics] = None
@@ -128,7 +140,17 @@ object Simulator:
                 case None               => None // nothing can run and nothing will wake up: hung
             else
               steps += 1
-              val i = if count == 1 then 0 else choose("schedule", count)
+              val i =
+                if count == 1 then 0
+                else
+                  choose(
+                    "schedule",
+                    count,
+                    i =>
+                      if i >= fibers.size then s"timer due at ${due(i - fibers.size)._1 / 1000000.0}ms"
+                      else if fibers(i)._1 < Long.MaxValue / 2 then s"fiber ${fibers(i)._1}"
+                      else "a wake-up" // a runnable that is not a fiber, such as STM waking its waiters
+                  )
               if i < fibers.size then
                 val (key, task) = fibers(i)
                 runnable.synchronized(runnable -= (key -> task)): Unit

@@ -3,12 +3,14 @@ package ferry.testkit.sim
 import java.util.SplittableRandom
 
 /**
- * One choice the simulator made: at `point`, among `options` alternatives, it took the one at index `took`.
+ * One choice the simulator made: at `point`, among `options` alternatives, it took the one at index `took`, at its
+ * `step`-th scheduling step and virtual time `at` (nanoseconds). `chose` says what the option was, for people: which
+ * fiber ran, which timer fired.
  *
  * A run of the simulator is a pure function of its program and its sequence of decisions. Recording the decisions is
  * therefore enough to replay a run exactly, and changing one of them is how a run is forked, shrunk or steered.
  */
-final case class Decision(point: String, options: Int, took: Int):
+final case class Decision(point: String, options: Int, took: Int, step: Long = 0L, at: Long = 0L, chose: String = ""):
   require(options >= 2 && took >= 0 && took < options, s"bad decision $this")
 
   override def toString: String = s"$point:$took/$options"
@@ -38,3 +40,11 @@ object Decisions:
 
   /** The first option, always: the run with no decisions taken. */
   val first: Decisions = (_, _) => 0
+
+  /**
+   * Replays `prefix` exactly, then hands every further choice to `rest`: how a run is forked. A recorded run's first
+   * decisions, with the last of them changed, followed by fresh choices, is a branch of that run.
+   */
+  def prefixed(prefix: Seq[Int], rest: Decisions): Decisions =
+    val it = prefix.iterator
+    (point, options) => if it.hasNext then it.next() min (options - 1) else rest.choose(point, options)
