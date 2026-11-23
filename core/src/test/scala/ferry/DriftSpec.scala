@@ -84,12 +84,15 @@ object DriftSpec extends ZIOSpecDefault:
   private def toolErrors(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) =
     verdicts.flatMap(_._2).collect { case e: Tlc.Verdict.ToolError => e }
 
-  /** How many of the model's behaviours diverge when replayed through `rules`, from a model altered by `alter`. */
+  /**
+   * How many of a thousand of the model's behaviours diverge when replayed through `rules`, from a model altered by
+   * `alter`. Some drifts show only in rare states (two lanes ready at once), so the sample is large; replay is cheap.
+   */
   private def divergences(config: String, rules: Engine.Rules, alter: Alter = Alter.none) =
     ZIO.attemptBlocking {
       val formal = Tlc.formal.get
       ferry.testkit.tla.Behaviours
-        .generate(formal, "Ferry", config, 100, 40, 7L, alter)
+        .generate(formal, "Ferry", config, 1000, 40, 7L, alter)
         .map(
           _.count(b =>
             ModelReplay

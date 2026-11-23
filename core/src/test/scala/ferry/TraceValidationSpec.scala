@@ -49,14 +49,13 @@ object TraceValidationSpec extends ZIOSpecDefault:
         verdict == Tlc.Verdict.Accepted
       )
     },
-    test("rejects a trace in which two steps are swapped") {
+    test("rejects a trace in which a call completes before it was made") {
       for
         run <- recordedRun
-        swapped = run.copy(actions =
-          run.actions.take(1) ++ run.actions.slice(2, 3) ++ run.actions.slice(1, 2) ++ run.actions.drop(3)
-        )
-        verdict <- check("trace_swapped", swapped)
-      yield assertTrue(swapped.actions != run.actions, verdict.isInstanceOf[Tlc.Verdict.Rejected])
+        done  = run.actions.indexWhere { case Action.CompleteDirect(_, _) => true; case _ => false }
+        early = run.actions(done) +: run.actions.patch(done, Nil, 1)
+        verdict <- check("trace_early_completion", run.copy(actions = early))
+      yield assertTrue(done > 0, verdict.isInstanceOf[Tlc.Verdict.Rejected])
     },
     test("rejects a trace with a batch the model would not take") {
       for
