@@ -34,6 +34,9 @@ jobs:
           distribution: 'temurin'
           cache: sbt
       - uses: sbt/setup-sbt@v1
+      # The conformance suites check runs against the TLA+ model with TLC; without it they fail as skipped.
+      - name: Fetch TLA+ tools
+        run: curl -fsSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
       - run: >-
           sbt "++${{ matrix.scala-version }} test"
           "++${{ matrix.scala-version }} examples/runMain ferry.examples.PricingAggregation"
@@ -50,7 +53,7 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
       - name: Fetch TLA+ tools
-        run: curl -fsSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.7.4/tla2tools.jar
+        run: curl -fsSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
       - name: Model-check the protocol
         run: formal/check.sh "$PWD/tla2tools.jar"
 

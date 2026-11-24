@@ -12,3 +12,4 @@ __pycache__/
 site/
 formal/states/
 formal/*_TTrace_*
+tla2tools.jar
