@@ -36,7 +36,6 @@ varies enough that a static `maxInFlightBatches` is either wasteful or overloads
 - *Simulation mode* (`tlc -simulate`) explores long random behaviours of larger instances.
 - *Apalache with an inductive invariant* would prove safety for any number of callers and keys, not just small
   instances.
-- *Trace validation*: logging admit, take and complete events from the stress tests and checking each trace against the
-  spec would catch drift between the code and the model mechanically.
+- *Trace validation*: no longer deferred. It is done, in both directions, by [0017](0017-model-conformance.md).
 
-**Revisit when** the protocol changes, starting with trace validation.
+**Revisit when** the protocol changes.

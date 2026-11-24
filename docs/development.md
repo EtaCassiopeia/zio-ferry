@@ -5,6 +5,7 @@
 | Path | Contents |
 |---|---|
 | `core/` | the library |
+| `testkit/` | unpublished, generic: the deterministic simulator and the TLA+ tooling (values, trace validation, behaviours, TLC runner) |
 | `examples/` | runnable examples, and `Snippets.scala`: the code shown on this site, compiled so it cannot go stale |
 | `formal/` | TLA+ models, their configurations, and `check.sh` |
 | `docs/` | this site: guides, architecture, decision records |
@@ -25,14 +26,23 @@ CI runs formatting, the tests on JDK 17 and 21 with both Scala versions, both ex
 
 ## Formal models
 
-Download [`tla2tools.jar`](https://github.com/tlaplus/tlaplus/releases) (CI uses v1.7.4), then:
+Download [`tla2tools.jar`](https://github.com/tlaplus/tlaplus/releases) (CI uses v1.8.0) to the root of the
+repository, where both the tests and the script find it, or point `TLA2TOOLS` at it. Then:
 
 ```sh
 formal/check.sh path/to/tla2tools.jar
 ```
 
-A change to the protocol in `Ferry.scala`, `PerKeyFerry.scala` or `Lanes.scala` needs a matching change to its
-model. A new mechanism needs a variant without it that must fail.
+A change to `Protocol.scala` needs the matching change to `formal/Ferry.tla`, or the conformance suites fail:
+trace validation rejects the code's runs, or replay of the model's behaviours diverges. A new action needs a case in
+`Protocol.Action`, the same name in the model's `Vocabulary`, and the same record in `act`. A new mechanism needs a
+variant without it that must fail.
+
+To see what a run did, and what changing one decision does to it:
+
+```sh
+sbt "core/Test/runMain ferry.viz.Visualize PerKeyBatched 7 target/viz"   # then open target/viz/multiverse.html
+```
 
 ## Documentation
 

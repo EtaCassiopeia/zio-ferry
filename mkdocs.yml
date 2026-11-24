@@ -76,8 +76,8 @@ nav:
       - Configuration and tuning: guide/configuration.md
   - Architecture:
       - architecture/index.md
-      - Ferry.make: architecture/single-queue.md
-      - Ferry.perKey: architecture/per-key.md
+      - The protocol: architecture/protocol.md
+      - The engine: architecture/engine.md
       - Running on a fleet: architecture/fleet.md
   - Verification: verification.md
   - Design:
@@ -98,6 +98,10 @@ nav:
           - 0013 Rename to Ferry: decisions/0013-rename-to-ferry.md
           - 0014 Commit, then project: decisions/0014-commit-then-project.md
           - 0015 Project per entry: decisions/0015-per-entry-projection.md
+          - 0016 One protocol: decisions/0016-one-protocol.md
+          - 0017 Model conformance: decisions/0017-model-conformance.md
+          - 0018 Deterministic simulation: decisions/0018-deterministic-simulation.md
+          - 0019 Answers after commit: decisions/0019-answers-after-commit.md
       - "Proposal: ordering, lateness, grouping": design/ordering.md
   - API reference: https://etacassiopeia.github.io/zio-ferry/api/
   - Development: development.md

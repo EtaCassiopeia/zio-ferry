@@ -1,6 +1,6 @@
 # 0003. Per-key batching with one batch in flight per key
 
-Status: Accepted
+Status: Accepted. The implementation is superseded by [0016](0016-one-protocol.md), which keeps the contract.
 
 ## Context
 

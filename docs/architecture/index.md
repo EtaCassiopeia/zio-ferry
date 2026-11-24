@@ -6,10 +6,12 @@ The design follows from a few rules. Each is recorded, with its reasons, in the 
 
 - **A batcher is a bulkhead.** It decides how much load to let through, how much to hold, and what to turn away.
   Overload is answered at once, with `Rejected`, never with unbounded latency.
-- **Never strand a caller.** Every input is owned by exactly one place at a time (the waiting room, a worker, or its
-  own caller) and that owner always answers it, including on interruption and shutdown.
-- **Keep the scheduling state pure.** `perKey`'s whole waiting room is one immutable value, changed by STM
-  transactions. Each transition can be tested on its own and maps to one action of the formal model.
+- **Never strand a caller.** Every input is owned by exactly one place at a time: its lane, a worker's batch, or its
+  own direct call. That owner always answers it, including on interruption and shutdown. Ownership is part of the
+  protocol's state, so this holds by construction.
+- **One protocol, written once, checked against its model.** All shared state is one immutable value. Each step is one
+  method, one STM transaction, and one action of the TLA+ model, with the same name. Recorded runs are checked against
+  the model, and the model's behaviours are replayed through the code ([Verification](../verification.md)).
 - **The store is the source of truth.** The library keeps no state between a key's batches and no log of its own.
   What decides correctness (order, deduplication, conflicts) lives in the write.
 - **Application code runs outside transactions.** `key`, `weigh` and `rank` are evaluated once per input, before
@@ -27,46 +29,43 @@ flowchart TB
     PW["ProjectedWrite<br/>commit, then project; resume"]
     ERR["FerryError<br/>Rejected | Failed(e)"]
   end
-  subgraph make ["Ferry.make / keyed"]
-    Q[bounded queue] --> W1["workers, one per slot<br/>(one assembles at a time)"]
+  subgraph core [One kernel]
+    E["Engine<br/>one STM transaction per step"] --> P["Protocol<br/>pure state machine:<br/>lanes, ready line, ownership"]
+    E --> R["Recorder<br/>the step's actions, in the transaction"]
   end
-  subgraph perkey ["Ferry.perKey"]
-    L["Lanes: one pure value in a TRef<br/>lane per key, ready line, deadlines"] --> W2[workers, one per slot]
-    L --> DC[direct calls for idle keys]
-  end
-  BD --> make
-  BD --> perkey
-  ORD --> L
-  FW -. "is a batch call for" .-> perkey
+  BD --> E
+  CFG --> E
+  ORD --> P
+  FW -. "is a batch call for" .-> BD
   PW -. "commits with" .-> FW
-  PW -. "is a batch call for" .-> perkey
+  M["formal/Ferry.tla"] -. "same actions, same records" .- P
 ```
 
 | Source | Role |
 |---|---|
-| `Ferry.scala` | The public trait, the three constructors, and the implementation of `make` |
+| `Ferry.scala` | The public trait and the constructors: `make` and `keyed` are the one-key case, `perKey` the general one |
+| `Protocol.scala` | The pure state machine: every scheduling decision, one method per model action |
+| `Engine.scala` | The effectful shell: admission, workers, direct calls, cancellation, close |
+| `Recorder.scala` | The seam between a step and its trace |
 | `FerryConfig.scala`, `PerKeyConfig.scala` | Validated settings |
 | `FerryError.scala` | The error type callers see |
-| `PerKeyFerry.scala` | `perKey`'s effectful shell: admission, workers, direct calls, close |
-| `Lanes.scala` | `perKey`'s pure waiting room: every scheduling decision |
 | `Order.scala` | Pluggable dispatch order |
 | `FoldWrite.scala` | The read, apply, conditional-write batch call |
-| `ProjectedWrite.scala` | The same, followed by a fenced projection that can be resumed from the store; the projection answers which entries it left pending, so a view of one row per entry can land in part |
+| `ProjectedWrite.scala` | The same, followed by a fenced projection that can be resumed from the store |
 
-## Two kernels
+## One kernel
 
-`make` and `perKey` share the public trait and the error model, but not their internals. They make different
-guarantees, so neither is a configuration of the other.
-
-| | [`make` / `keyed`](single-queue.md) | [`perKey`](per-key.md) |
+| | `make` / `keyed` | `perKey` |
 |---|---|---|
-| Waiting room | one bounded queue | one lane per key, in one `TRef` |
-| Batch contents | any inputs | one key's inputs, in rank order |
+| Keys | one | `key(input)` |
+| Batch contents | any inputs, in arrival order | one key's inputs, in rank order |
 | In flight | up to `maxInFlightBatches` batches | up to `maxInFlightBatches` batches, at most one per key, plus direct calls for idle keys |
-| When a batch leaves | full, or `maxBatchDelay` after its oldest input | full, or when the key's previous call completes (zero delay), or `maxBatchDelay` after its oldest input |
-| Synchronisation | queue, lock and semaphore | STM transactions over one value |
+| When a batch leaves | full, or `maxBatchDelay` after its oldest input | the same; with zero delay, as soon as the key is free |
 | Bounds | count | count and weight |
-| Formal model | `formal/Ferry.tla` | `formal/PerKey.tla` |
+
+Both run the same [protocol](protocol.md) on the same [engine](engine.md), and both are checked against the same
+model, [`formal/Ferry.tla`](https://github.com/EtaCassiopeia/zio-ferry/blob/main/formal/Ferry.tla). See
+[0016](../decisions/0016-one-protocol.md).
 
 ## Beyond one process
 

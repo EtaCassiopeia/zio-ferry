@@ -1,6 +1,6 @@
 # 0001. One admission queue, one batch assembled at a time
 
-Status: Accepted (recorded after the fact for the ZIO 2 rewrite of `Ferry.make`)
+Status: Accepted (recorded after the fact for the ZIO 2 rewrite of `Ferry.make`). The implementation is superseded by [0016](0016-one-protocol.md), which keeps the contract.
 
 ## Context
 

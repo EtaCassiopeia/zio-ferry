@@ -40,8 +40,10 @@ flight per key. Idle keys are not batched at all; busy keys get batches that gro
 idempotent "read once, apply, conditional write" call to pair it with, and `ProjectedWrite` the same followed by a
 fenced projection into a read-side view, per record or per entry.
 
-Every caller gets an answer, overload fails fast, and per-key order holds. This is checked by fault-injecting
-simulations, stress tests and TLA+ models with weakened variants that must fail.
+Every caller gets an answer, overload fails fast, and per-key order holds. This is checked by deterministic
+simulations, stress tests and TLA+ models with weakened variants that must fail. The code and its model are kept in
+step mechanically: every step of the code is an action of the model, recorded runs are checked against the model by
+TLC, and the model's behaviours are replayed through the code ([verification](https://etacassiopeia.github.io/zio-ferry/verification/)).
 
 ```sh
 sbt testFull

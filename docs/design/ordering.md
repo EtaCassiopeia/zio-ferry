@@ -1,5 +1,13 @@
 # Ordering, lateness and grouping: a strategy-agnostic kernel with pluggable policies
 
+!!! note "Written before [0016](../decisions/0016-one-protocol.md) and [0017](../decisions/0017-model-conformance.md)"
+    `Lanes` is now part of `Protocol`, and `formal/PerKey.tla` is now `formal/Ferry.tla`. One change of approach matters
+    for this proposal. The model's `Take` is now deterministic (the head of the ready line, its longest fitting prefix),
+    so that the model's behaviours can be replayed through the code. A policy that chooses "any eligible subset" would
+    need the code's choice recorded as part of the action (as `Take` already records its batch), not left free in the
+    model.
+
+
 Status: partly built. Built: the pluggable order with `Order.arrival` and `Order.by`
 ([0011](../decisions/0011-pluggable-dispatch-order.md)), the `directIdleKeys` switch
 ([0010](../decisions/0010-direct-calls-for-idle-keys.md)) and the `FoldWrite` helper

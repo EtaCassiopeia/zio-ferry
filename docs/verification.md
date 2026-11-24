@@ -1,75 +1,145 @@
 # Verification
 
 A batcher's bugs are concurrency bugs: a caller left waiting forever, an input sent twice, a key with two calls in
-flight, a batch out of order. Example-based tests cover only the interleavings someone thought of, so Ferry is
-checked in layers, each covering what the others cannot. See [0002](decisions/0002-layered-verification.md) and
-[0009](decisions/0009-drop-mutation-testing.md).
+flight, a batch out of order. Example-based tests cover only the interleavings someone thought of, and a TLA+ model
+covers every interleaving of a protocol that may not be the one the code runs. Ferry is checked in layers. The layers
+are tied together so that **the model and the code cannot drift apart without a test failing**. See
+[0002](decisions/0002-layered-verification.md), [0017](decisions/0017-model-conformance.md) and
+[0018](decisions/0018-deterministic-simulation.md).
 
 | Layer | What it gives | Where |
 |---|---|---|
-| Unit tests on virtual time | exact timing of deadlines and delays | `FerrySpec`, `PerKeySpec`, `FoldWriteSpec`, `ProjectedWriteSpec` (one object per record, and one row per entry) |
-| Model-based tests | batches and dispatch instants agree with an independent executable model, step by step | `FerryModelSpec`, `LanesSpec` |
-| Seeded simulations | random workloads, failures, interruptions and shutdown; every trace checked against the contract | `Simulation`, `PerKeySimulation`, `FencedWriterSimulation`, `ProjectedWriterSimulation`, `PartialProjectionSimulation` |
-| Stress tests on the real scheduler | interleavings that virtual time never picks | `FerryStressSpec`, `PerKeyStressSpec` |
-| TLA+ model checking | every interleaving of the protocol, in a small instance, for safety and liveness | [`formal/`](https://github.com/EtaCassiopeia/zio-ferry/tree/main/formal) |
+| Unit tests on virtual time | exact timing of deadlines and delays | `FerrySpec`, `PerKeySpec`, `FoldWriteSpec`, `ProjectedWriteSpec` |
+| Protocol tests | each step of the pure state machine, on its own | `ProtocolSpec` |
+| Model-based tests | batches and dispatch instants agree with an independent executable model | `FerryModelSpec` |
+| Deterministic simulation | random scenarios in which scheduling, time and outcomes are recorded decisions; every run checked against the contract, replayable and shrinkable | `FerrySimulation`, `SimulationConformanceSpec` |
+| Trace validation (code → model) | every simulated run is a behaviour of the TLA+ model | `SimulationConformanceSpec`, `TraceValidationSpec` |
+| Model replay (model → code) | every behaviour TLC generates is followed step by step by the code | `ModelReplaySpec` |
+| Vocabulary and coverage | the code's actions are the model's, and all of them are exercised on both sides | `VocabularySpec` |
+| Planted drift | wrong code and wrong models are caught | `DriftSpec` |
+| Other seeded simulations | fenced writes and projections through crashes, lost answers and throttling | `FencedWriterSimulation`, `ProjectedWriterSimulation`, `PartialProjectionSimulation` |
+| Stress tests on the real scheduler | interleavings a single-threaded simulator never runs | `FerryStressSpec`, `PerKeyStressSpec` |
+| TLA+ model checking | every interleaving of the protocol in a small instance, for safety and liveness | [`formal/`](https://github.com/EtaCassiopeia/zio-ferry/tree/main/formal) |
 
-## What the simulations check
+## The code and the model, kept in step
 
-Every trace, for every random scenario:
+Three rules make the check mechanical.
 
-- every caller gets an answer, and the right one for its batch: its result, its batch's failure, or an interruption
-  that someone actually caused;
-- no input is sent twice; a rejected input, or one whose caller gave up while it waited, is never sent;
-- no call is rejected while the waiting room could not have been full;
-- batches respect `maxBatchSize` and `maxBatchWeight`, and a partial batch never leaves before its deadline;
-- nothing is sent after close, and every call made after close is interrupted;
-- (`perKey`) a call holds one key's inputs, a key never has two calls in flight, and a key's inputs are never sent out
-  of order;
-- (`perKey`) a direct call carries exactly its caller's input, and happens only with zero delay;
-- (fenced writer) through crashes, lost responses, throttling and misrouted clients, no input is applied twice, and
-  every answer matches what the store holds.
-- (commit, then project) through the same faults, a refused projection and a crash between the two writes, no entry is
-  projected twice, every view is a projection of its log, an input answered `Projected` was in the view, and with a
-  sweeper every view catches up with its log. Without the projection's fence an entry is projected twice; without a
-  sweeper a projection that ran out of retries is never finished; answering `Projected` straight after the commit
-  claims a view that is not there.
+1. **Every step of the code is an action of the model.** All of Ferry's shared state is one pure value,
+   [`Protocol`](architecture/protocol.md), with one method per step. The [engine](architecture/engine.md) applies
+   each step in one STM transaction, and inside it hands the step's actions to a recorder. A recorded trace is
+   therefore in the order the steps took effect.
+2. **Both sides write the same record.** The model keeps a history variable `act`. Every action sets it to a record
+   such as `[name |-> "Take", worker |-> "w1", key |-> "k1", batch |-> <<3, 5>>]`, which is exactly what the code
+   records for the same step.
+3. **The model's free choices are only the environment's.** Arrivals, a deadline passing (`Due`), a call's outcome, a
+   caller giving up, and close. Which lane a worker takes, and how much of it, the model decides as the code does.
 
-The stress tests add what only real threads show: the number of batches in flight never exceeds
-`maxInFlightBatches`, and no caller hangs.
+With those rules, there are two checks, one in each direction:
+
+```mermaid
+flowchart LR
+  subgraph code [code]
+    S["simulated run<br/>(deterministic)"] --> T["recorded trace<br/>Enqueue, Due, Take, Complete…"]
+    P["Protocol<br/>(pure)"]
+  end
+  subgraph model [model]
+    F["FerryTrace.tla<br/>act' = Trace[i]"]
+    B["random behaviours<br/>TLC -simulate"]
+  end
+  T -->|"trace validation"| F
+  B -->|"replay, state compared after each step"| P
+```
+
+- **Code → model.** A recorded run is written as a TLA+ module. TLC explores
+  [`FerryTrace.tla`](https://github.com/EtaCassiopeia/zio-ferry/blob/main/formal/FerryTrace.tla), which takes one
+  model step per recorded event and requires the model's `act` to equal the event. The run is *accepted* if the end
+  of the trace is reachable, and otherwise *rejected* with the number of events that matched. This is trace
+  validation, after Cirstea, Kuppe, Loillier and Merz (SEFM 2024).
+- **Model → code.** TLC generates random behaviours of each configuration of the model. Each step's `act` is applied
+  to the code's `Protocol`, which must take the very same action. Its state (lanes, schedules, ready line, busy keys,
+  batches, pending callers) must then equal the model's.
+
+A missing TLC makes these suites fail with "skipped", never pass. They look for `tla2tools.jar` in `$TLA2TOOLS`, at
+the root of the repository, or in the usual local installs.
+
+### Planted drift
+
+`DriftSpec` makes the code and the model disagree on purpose, and requires the checks to notice:
+
+| Drift | Caught by |
+|---|---|
+| the engine serves the *last* ready lane first | trace validation, and replay |
+| the engine ignores `maxBatchWeight` | trace validation |
+| the engine leaves a cancelled input in its lane (as 0.3 did) | trace validation, and replay |
+| the model takes only full lanes | trace validation of the code's partial batches |
+| the model lets a cancelled caller keep its place | trace validation, and replay |
+
+None of these code drifts breaks a check of the simulation's contract. Each is a change of behaviour that a test
+written for the contract would not see, which is why it matters to have the model as an oracle.
+
+## Deterministic simulation
+
+The simulator (in the `testkit` module) runs a ZIO program with every source of nondeterminism turned into a recorded
+decision:
+
+- **Scheduling.** All fibers run on one executor, driven from the test's thread. When more than one could run,
+  which one does is a decision.
+- **Time.** The clock is virtual and jumps to the next sleep. A sleep that is due competes with the runnable fibers,
+  so "the timeout fires first" and "the answer arrives first" are both explored.
+- **Program-owned choices**, such as a simulated call's latency and outcome, are decisions too.
+
+A run is therefore a function of its scenario and its decisions. The same seed gives the same run, and
+`Decisions.scripted(run.script)` replays it exactly. A failing run is reported with its seed and a script shrunk to
+the shortest that still fails.
+
+### Seeing the branches of a run
+
+Changing one decision and replaying the rest gives a *branch*. `Visualize` explores one scenario's branches and writes
+two kinds of output:
+
+- **A self-contained page**: the tree of branches, each branch's timeline (callers, workers, keys, and the decisions,
+  imposed or free), what changed from its parent, and whether it keeps the contract and is accepted by TLC.
+- **Chrome trace events**, which open in [Perfetto](https://ui.perfetto.dev).
+
+```sh
+sbt "core/Test/runMain ferry.viz.Visualize PerKeyBatched 7 target/viz"
+sbt "core/Test/runMain ferry.viz.Visualize Make 12 target/viz-drift KeepCancelledInLane"   # with drifted rules
+```
+
+A branch can also be *steered*. Search for a run with a given property, such as "a call fails, then its key is served
+again", then shrink it to the fewest decisions that still produce it. Replaying those decisions pins that
+interleaving: what a fault-injection probe does by pausing a fiber at a point, but with nothing paused and nothing
+timing-dependent.
 
 ## Formal models
 
-Each model is written at the granularity of the code's atomic steps: one action per STM transaction or uninterruptible
-region, so a change to the code maps to a change in the model.
-
-**Every model ships with weakened variants that must fail.** Each variant removes one mechanism. TLC finding a
-counterexample proves the mechanism is needed, and that the model can notice its absence.
+`Ferry.tla` models the protocol behind both constructors, action for action. Every model ships with **weakened
+variants that must fail**: each removes one mechanism, and TLC finding a counterexample shows both that the mechanism
+is needed and that the model can notice its absence.
 
 | Model | Checks | Variants that must fail |
 |---|---|---|
-| `Ferry.tla` | no input sent twice, turned-away inputs never sent, one assembler, bounded batches, one owner per input, nobody stranded on close; every admitted caller is answered | `UnserialisedAdmission`, `NoCleanupOnInterrupt`, `NonAtomicTake`: a caller is stranded |
-| `PerKey.tla` (`PerKey`, `PerKeyBatchOnly`) | all of the above per key, plus one call in flight per key (direct calls included) and rank order; every caller answered, every direct caller done | `PerKeyUnsorted`: out of rank order. `PerKeyNoBusyGuard`, `PerKeyNoDirectGuard`, `PerKeyNoAwaitCall`: two calls in flight for one key. `PerKeyNonAtomicTake`, `PerKeyNonAtomicAdmission`: a caller is stranded |
+| `Ferry.tla` (`Ferry`, `FerryBatchOnly`, `FerryMake`) | one call in flight per key; rank order; no input sent twice; turned-away inputs never sent; batches and the waiting room bounded by count and weight; no caller stranded after close; every caller answered | `FerryUnsorted`: out of rank order. `FerryNoBusyGuard`, `FerryNoDirectGuard`: two calls in flight for one key. `FerryNonAtomicAdmission`, `FerryNoDrain`: a caller stranded after close |
 | `FencedWriter.tla` | across processes with arbitrary routing, crashes and lost answers: no input applied twice, every answer true | `FencedWriterUnfenced`, `FencedWriterNoDedup`: an input is applied twice |
-| `ProjectedWriter.tla` | the same for a commit followed by a fenced projection and a sweeper: no entry applied or projected twice, the view a prefix of the log, every answer true, an input answered "projected" only once it is in the view; the view eventually equals the log | `ProjectedWriterUnfencedProject`: an entry is projected twice. `ProjectedWriterEarlyAnswer`: answered "projected" before the view has it. `ProjectedWriterNoResume`: without retrying a failed projection or a sweeper, one cut short by a crash or a give-up is never finished (liveness) |
-| `ProjectedWriterPartial.tla` | the same for a view of one row per entry, each row its own write: no entry applied twice, no row written twice, every row from the log, the marker clear only when every entry has its row, every answer true, an input answered "projected" only once its row is in the view; eventually every entry has its row and the marker is clear | `ProjectedWriterPartialUnconditionalRows`: a row is written twice. `ProjectedWriterPartialEarlyClear`: the marker clears with a refused row missing. `ProjectedWriterPartialUnfencedClear`: a clear made for a shorter log clears the marker a later commit set. `ProjectedWriterPartialNoResume`: without reading again or a sweeper, a refused row is never written (liveness) |
+| `ProjectedWriter.tla` | the same for a commit followed by a fenced projection and a sweeper | `ProjectedWriterUnfencedProject`, `ProjectedWriterEarlyAnswer`, `ProjectedWriterNoResume` |
+| `ProjectedWriterPartial.tla` | the same, for a view of one row per entry | `ProjectedWriterPartialUnconditionalRows`, `ProjectedWriterPartialEarlyClear`, `ProjectedWriterPartialUnfencedClear`, `ProjectedWriterPartialNoResume` |
 
-CI runs every configuration on every change, and fails if a passing model fails or a weakened variant passes. A variant
-that removes a liveness mechanism must violate its temporal property rather than an invariant.
+CI runs every configuration on every change, and fails if a passing model fails or a weakened variant passes.
 
 ## Running it
 
 ```sh
-sbt testFull                                  # every test; sbt 2's `test` is incremental
-FERRY_SAMPLES=2000 sbt testFull            # search longer, e.g. before a release
+sbt testFull                                  # every test, conformance included (needs tla2tools.jar)
+FERRY_SAMPLES=500 sbt testFull                # search longer, e.g. before a release
 formal/check.sh path/to/tla2tools.jar         # TLC, every model and variant
 ```
 
-`FERRY_TEST_TIMEOUT_SECONDS` sets the per-test time limit, so a change that makes callers hang fails fast.
-
 ## Limits
 
-- The models check small instances (a few callers, keys and workers). Larger or unbounded checks are listed in
-  [0008](decisions/0008-deferred.md).
-- The models are written by hand and can drift from the code. Trace validation would catch that mechanically; it is
-  deferred too.
-- Nothing here measures performance. Benchmarks come before any performance work.
+- **Bounded evidence.** Trace validation covers the runs that were simulated. Replay covers the behaviours TLC
+  generated. Model checking covers every behaviour of small instances of the model.
+- **The writer models are not yet conformance-checked.** `FencedWriter` and the projection models describe deployment
+  patterns across processes. Their simulations check the contract, but not yet the model.
+- **The simulator is single-threaded.** The stress tests remain the check against real-thread surprises.
+- **Nothing here measures performance.** Benchmarks come before any performance work ([0008](decisions/0008-deferred.md)).
