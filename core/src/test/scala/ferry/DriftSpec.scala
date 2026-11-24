@@ -16,8 +16,9 @@ import ferry.testkit.tla.{Alter, Tlc}
  *   - '''model drift''': a copy of `Ferry.tla` is altered; the code's runs must be rejected against it, or its
  *     behaviours must diverge when replayed through the code.
  *
- * The contract checks of the simulation are run too, and reported: most of these drifts break no documented promise by
- * themselves, which is exactly why a model the code is checked against is worth having.
+ * The contract checks of the simulation are run too. Of the code drifts the model catches, only the weight limit also
+ * breaks a documented promise; the other two break none, which is exactly why a model the code is checked against is
+ * worth having. The converse holds as well: the model has no clock, so a drift in timing is the contract's alone.
  */
 object DriftSpec extends ZIOSpecDefault:
 
@@ -35,6 +36,12 @@ object DriftSpec extends ZIOSpecDefault:
     override def take[K, X](p: Protocol[K, X], worker: Int, now: Long) =
       val unlimited = p.copy(limits = p.limits.copy(maxBatchWeight = Long.MaxValue))
       unlimited.take(worker, now).map(s => s.copy(next = s.next.copy(limits = p.limits)))
+
+  /**
+   * Treats every deadline as passed: partial batches leave at once. The model has no clock, so only the contract sees.
+   */
+  object IgnoreDeadline extends Engine.Rules:
+    override def take[K, X](p: Protocol[K, X], worker: Int, now: Long) = p.take(worker, Long.MaxValue)
 
   /** A caller that gives up stops waiting, but its input stays in the lane and is sent with the batch. */
   object KeepCancelledInLane extends Engine.Rules:
@@ -81,6 +88,9 @@ object DriftSpec extends ZIOSpecDefault:
   private def rejected(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) =
     verdicts.count(_._2.exists(_.isInstanceOf[Tlc.Verdict.Rejected]))
 
+  /** How many runs broke the contract checks of the simulation. */
+  private def broken(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) = verdicts.count(_._1)
+
   private def toolErrors(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) =
     verdicts.flatMap(_._2).collect { case e: Tlc.Verdict.ToolError => e }
 
@@ -108,19 +118,23 @@ object DriftSpec extends ZIOSpecDefault:
         for
           traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), ServeLastReady, Alter.none)
           replay <- divergences("FerryBatchOnly", ServeLastReady)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0))
+        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0), broken(traces) == 0)
       },
       test("ignoring the weight limit") {
         for traces <- traceVerdicts(Seq(Family.Weighted), IgnoreWeightLimit, Alter.none)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0)
+        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, broken(traces) > 0)
       },
       test("leaving a cancelled input in its lane") {
         for
           traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), KeepCancelledInLane, Alter.none)
           replay <- divergences("FerryBatchOnly", KeepCancelledInLane)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0))
+        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0), broken(traces) == 0)
       }
     ),
+    test("sending partial batches before their deadline is the contract's to catch: the model has no clock") {
+      for traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), IgnoreDeadline, Alter.none)
+      yield assertTrue(toolErrors(traces).isEmpty, broken(traces) > 0, rejected(traces) == 0)
+    },
     suite("in the model")(
       test("a model that takes only full lanes rejects the code's partial batches") {
         for traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), Engine.Rules.standard, TakeOnlyFull)

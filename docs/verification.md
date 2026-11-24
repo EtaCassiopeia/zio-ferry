@@ -12,7 +12,7 @@ are tied together so that **the model and the code cannot drift apart without a 
 | Unit tests on virtual time | exact timing of deadlines and delays | `FerrySpec`, `PerKeySpec`, `FoldWriteSpec`, `ProjectedWriteSpec` |
 | Protocol tests | each step of the pure state machine, on its own | `ProtocolSpec` |
 | Model-based tests | batches and dispatch instants agree with an independent executable model | `FerryModelSpec` |
-| Deterministic simulation | random scenarios in which scheduling, time and outcomes are recorded decisions; every run checked against the contract, replayable and shrinkable | `FerrySimulation`, `SimulationConformanceSpec` |
+| Deterministic simulation | random scenarios in which scheduling, time and outcomes are recorded decisions; every run checked against the contract, replayable and shrinkable; runs of up to 6 callers for the model, up to 24 for the contract alone | `FerrySimulation`, `SimulationConformanceSpec` |
 | Trace validation (code → model) | every simulated run is a behaviour of the TLA+ model | `SimulationConformanceSpec`, `TraceValidationSpec` |
 | Model replay (model → code) | every behaviour TLC generates is followed step by step by the code | `ModelReplaySpec` |
 | Vocabulary and coverage | the code's actions are the model's, and all of them are exercised on both sides | `VocabularySpec` |
@@ -70,13 +70,27 @@ the root of the repository, or in the usual local installs.
 | Drift | Caught by |
 |---|---|
 | the engine serves the *last* ready lane first | trace validation, and replay |
-| the engine ignores `maxBatchWeight` | trace validation |
+| the engine ignores `maxBatchWeight` | trace validation, and the contract |
 | the engine leaves a cancelled input in its lane (as 0.3 did) | trace validation, and replay |
 | the model takes only full lanes | trace validation of the code's partial batches |
 | the model lets a cancelled caller keep its place | trace validation, and replay |
+| the engine sends partial batches before their deadline | the contract only: TLC accepts every run |
 
-None of these code drifts breaks a check of the simulation's contract. Each is a change of behaviour that a test
-written for the contract would not see, which is why it matters to have the model as an oracle.
+Two of the three code drifts the model catches break no check of the simulation's contract. Each is a change of
+behaviour that a test written for the contract would not see, which is why it matters to have the model as an oracle.
+
+The last row is the converse. The model has no clock: a deadline passing is an environment action (`Due`) it may take
+at any time. So the timing of batches, like the user's call and what each caller is answered from it, is checked by
+the contract alone. The two oracles divide the work:
+
+| The contract checks | The model checks |
+|---|---|
+| no partial batch leaves before its deadline (virtual time) | per-key order, from the order of admission |
+| each caller is answered from the call that carried its input, with that call's outcome | a caller who gave up is never sent |
+| batch size and weight, keys not mixed, direct calls carry only their caller's input | nothing is taken after close |
+| at most one call per key, and no more worker calls than workers | a refused or rejected input is never sent, and every caller is answered |
+
+`DriftSpec` asserts which side catches each drift, so this table is tested too.
 
 ## Deterministic simulation
 
