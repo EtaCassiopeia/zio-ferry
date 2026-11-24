@@ -85,8 +85,8 @@ object PerKeyStressSpec extends ZIOSpecDefault:
           val ids     = sent.flatMap(_._2.toChunk)
           val batchOf = sent.flatMap((_, b) => b.map(_ -> b)).toMap
           val wrong   = exits.toList.flatMap(_.zipWithIndex).collect {
-            case (Exit.Success(v), id) if v != -id || batchOf.get(id).forall(failing) => id
-            case (exit, id) if Simulation.isRejected(exit) && batchOf.contains(id)    => id
+            case (Exit.Success(v), id) if v != -id || batchOf.get(id).forall(failing)   => id
+            case (exit, id) if FerrySimulation.isRejected(exit) && batchOf.contains(id) => id
             case (Exit.Failure(c), id)
                 if c.failureOption.exists(_.isInstanceOf[FerryError.Failed[?]]) &&
                   !batchOf.get(id).exists(failing) =>

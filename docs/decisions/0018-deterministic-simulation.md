@@ -32,3 +32,8 @@ reduces a failing script to the shortest that still fails.
   exception instances that differ on every run.
 - The simulator is single-threaded. The stress tests on the real scheduler remain the check against real-thread
   surprises.
+- The `TestClock` simulations of `make` and `perKey` (`Simulation`, `PerKeySimulation`) are retired. Their contract
+  checks moved into `FerrySimulation`, which also runs larger scenarios than the model is checked with. Checks that
+  depend on the order of protocol steps (per-key order, nothing sent after a give-up or after close) are left to the
+  model, which sees that order exactly; a test-side clock only approximates it. The writer simulations still use the
+  `TestClock`.

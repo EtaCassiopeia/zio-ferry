@@ -5,11 +5,6 @@ import zio.test.*
 
 object PerKeyPropertySpec extends ZIOSpecDefault:
 
-  private def honoursContract(scenarios: Gen[Any, PerKeySimulation.Scenario]) =
-    check(scenarios) { s =>
-      PerKeySimulation.run(s).map(trace => assertTrue(PerKeySimulation.violations(s, trace) == Nil))
-    }
-
   import FencedWriterSimulation.{Command, Fault, Scenario, Submission, Writer}
 
   /** Command 0 is sent to its owner, whose write is delayed on the wire past the owner's crash. */
@@ -24,17 +19,6 @@ object PerKeyPropertySpec extends ZIOSpecDefault:
     FencedWriterSimulation.run(s, writer).map(FencedWriterSimulation.violations(s, _))
 
   def spec = suite("Ferry.perKey properties")(
-    suite("simulated workloads")(
-      test("honours its contract under random load, weights, latency and failures") {
-        honoursContract(PerKeySimulation.scenario(cancellations = false, close = false))
-      },
-      test("honours its contract when callers are interrupted at random times") {
-        honoursContract(PerKeySimulation.scenario(cancellations = true, close = false))
-      },
-      test("never strands a caller when its scope closes mid-flight") {
-        honoursContract(PerKeySimulation.scenario(cancellations = true, close = true))
-      }
-    ) @@ Effort.samples(150),
     suite("fenced single writer")(
       test("applies every command exactly once and answers it truthfully, under faults, misrouting and a crash") {
         check(FencedWriterSimulation.scenario) { s =>

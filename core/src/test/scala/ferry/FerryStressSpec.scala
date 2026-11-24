@@ -52,8 +52,8 @@ object FerryStressSpec extends ZIOSpecDefault:
           val batchOf   = sent.flatMap(b => b.map(_ -> b)).toMap
           val sentTwice = sent.flatMap(_.toChunk).size - batchOf.size
           val wrong     = exits.toList.flatMap(_.zipWithIndex).collect {
-            case (Exit.Success(v), id) if v != -id || batchOf.get(id).forall(failing) => id
-            case (exit, id) if Simulation.isRejected(exit) && batchOf.contains(id)    => id
+            case (Exit.Success(v), id) if v != -id || batchOf.get(id).forall(failing)   => id
+            case (exit, id) if FerrySimulation.isRejected(exit) && batchOf.contains(id) => id
             case (Exit.Failure(c), id)
                 if c.failureOption.exists(_.isInstanceOf[FerryError.Failed[?]]) &&
                   !batchOf.get(id).exists(failing) =>

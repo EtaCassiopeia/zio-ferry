@@ -5,21 +5,7 @@ import zio.test.*
 
 object FerryPropertySpec extends ZIOSpecDefault:
 
-  private def honoursContract(scenarios: Gen[Any, Simulation.Scenario]) =
-    check(scenarios)(s => Simulation.run(s).map(trace => assertTrue(Simulation.violations(s, trace) == Nil)))
-
   def spec = suite("Ferry properties")(
-    suite("simulated workloads")(
-      test("honours its contract under random load, latency, failures and defects") {
-        honoursContract(Simulation.scenario(cancellations = false, close = false))
-      },
-      test("honours its contract when callers are interrupted at random times") {
-        honoursContract(Simulation.scenario(cancellations = true, close = false))
-      },
-      test("never strands a caller when its scope closes mid-flight") {
-        honoursContract(Simulation.scenario(cancellations = true, close = true))
-      }
-    ) @@ Effort.samples(150),
     test("keyed sends each distinct input once and answers every caller from the map") {
       check(Gen.chunkOfBounded(1, 20)(Gen.int(0, 6))) { inputs =>
         for

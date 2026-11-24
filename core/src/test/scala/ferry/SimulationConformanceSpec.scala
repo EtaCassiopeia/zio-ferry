@@ -17,8 +17,8 @@ object SimulationConformanceSpec extends ZIOSpecDefault:
 
   private val samples = sys.env.get("FERRY_SAMPLES").flatMap(_.toIntOption).getOrElse(30)
 
-  private def simulate(family: Family, seed: Long): Result =
-    FerrySimulation.run(FerrySimulation.scenario(family, seed), Decisions.seeded(seed))
+  private def simulate(family: Family, seed: Long, maxCallers: Int = 6): Result =
+    FerrySimulation.run(FerrySimulation.scenario(family, seed, maxCallers), Decisions.seeded(seed))
 
   // Every simulation runs on a blocking thread: the simulator drives its fibers from the calling thread, which must not
   // be one of the runtime's own workers.
@@ -51,6 +51,20 @@ object SimulationConformanceSpec extends ZIOSpecDefault:
         .orDie
         .map(same => assertTrue(same.forall(identity)))
     },
+    suite("keep the contract under heavier load than the model is checked with")(
+      Family.values.toList.map { family =>
+        test(family.toString) {
+          ZIO
+            .attemptBlocking((1L to samples.toLong * 5).flatMap { seed =>
+              val r        = simulate(family, seed, maxCallers = 24)
+              val problems = FerrySimulation.violations(r)
+              Option.when(problems.nonEmpty)(explain(r, seed, problems))
+            })
+            .orDie
+            .map(broken => assertTrue(broken.isEmpty))
+        }
+      }*
+    ),
     suite("keep the contract and are behaviours of the model")(
       Family.values.toList.map { family =>
         test(family.toString) {
