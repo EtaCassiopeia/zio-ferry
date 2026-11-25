@@ -125,6 +125,10 @@ object FencedWriterSimulation:
   val lostResponse: Scenario =
     Scenario(List(Submission(Command(0, 0), 0, misrouted = false)), List(Fault.LostResponse), None)
 
+  /** Command 0's every append is throttled, five times in a row: its node gives up, and its client sends again. */
+  val throttledOut: Scenario =
+    Scenario(List(Submission(Command(0, 0), 0, misrouted = false)), List.fill(5)(Fault.Throttle), None)
+
   def scenario: Gen[Any, Scenario] =
     for
       submissions <- Gen.listOfBounded(1, 24)(

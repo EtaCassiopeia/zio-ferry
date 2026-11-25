@@ -3,7 +3,7 @@ package ferry
 import zio.*
 import zio.test.*
 
-import ferry.FencedWriterSimulation.{lateWriteAfterCrash, lostResponse, Scenario, Writer}
+import ferry.FencedWriterSimulation.{lateWriteAfterCrash, lostResponse, throttledOut, Scenario, Writer}
 import ferry.testkit.tla.{Tlc, Value}
 
 /**
@@ -26,10 +26,17 @@ object FencedWriterConformanceSpec extends ZIOSpecDefault:
         verdicts("writer", s, Writer(), Writer()).map(vs => assertTrue(vs.nonEmpty, vs.values.forall(_.accepted)))
       }
     } @@ Effort.samples(25),
-    test("the simulated runs take every step of the model") {
+    test("a node that runs out of retries gives up its batch, and that is a behaviour of the model too") {
+      for vs <- verdicts("giveup", throttledOut, Writer(), Writer())
+      yield assertTrue(vs.nonEmpty, vs.values.forall(_.accepted))
+    },
+    test("the simulated runs, and the named scenarios, take every step of the model") {
+      // A fixed seed: a node gives up only after five store errors in a row, which random scenarios rarely draw.
       for
-        scenarios <- FencedWriterSimulation.scenario.runCollectN(200)
-        runs      <- ZIO.foreach(scenarios)(s => FencedWriterSimulation.run(s).map(s -> _))
+        _      <- TestRandom.setSeed(20261125L)
+        random <- FencedWriterSimulation.scenario.runCollectN(200)
+        scenarios = random ++ List(lateWriteAfterCrash, lostResponse, throttledOut)
+        runs <- ZIO.foreach(scenarios)(s => FencedWriterSimulation.run(s).map(s -> _))
         names = runs.flatMap { (s, t) =>
           FencedWriterConformance
             .traces(t.events, s.submissions.map(_.command.key).toSet)
