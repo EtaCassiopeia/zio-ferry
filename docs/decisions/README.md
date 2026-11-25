@@ -25,3 +25,4 @@ mark them superseded; a changed decision gets a new record. Proposals not yet de
 | [0017](0017-model-conformance.md)      | Check the code against the model in both directions                      | Accepted |
 | [0018](0018-deterministic-simulation.md) | Simulate deterministically: a run is a function of its decisions       | Accepted |
 | [0019](0019-answers-after-commit.md)   | Deliver answers after a step commits                                     | Accepted |
+| [0020](0020-writer-conformance.md)     | Check the fenced writer's simulation against its model                   | Accepted |

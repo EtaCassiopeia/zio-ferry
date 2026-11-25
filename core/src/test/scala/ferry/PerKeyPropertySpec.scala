@@ -5,15 +5,7 @@ import zio.test.*
 
 object PerKeyPropertySpec extends ZIOSpecDefault:
 
-  import FencedWriterSimulation.{Command, Fault, Scenario, Submission, Writer}
-
-  /** Command 0 is sent to its owner, whose write is delayed on the wire past the owner's crash. */
-  private val lateWriteAfterCrash =
-    Scenario(List(Submission(Command(0, 0), 0, misrouted = false)), List(Fault.Late(50)), Some(0 -> 10L))
-
-  /** Command 0 is applied, but the response is lost, so the writer retries. */
-  private val lostResponse =
-    Scenario(List(Submission(Command(0, 0), 0, misrouted = false)), List(Fault.LostResponse), None)
+  import FencedWriterSimulation.{lateWriteAfterCrash, lostResponse, Scenario, Writer}
 
   private def violations(s: Scenario, writer: Writer) =
     FencedWriterSimulation.run(s, writer).map(FencedWriterSimulation.violations(s, _))

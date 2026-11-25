@@ -35,7 +35,9 @@ Both safeguards are needed, and each is shown to be needed:
   in flight, and lost answers. It checks that no input is applied twice and every answer is true. Without the fence,
   two writers interleave. Without deduplication, a retry after a lost answer applies an input twice.
 - `FencedWriterSimulation` runs the real `perKey` through the same faults on virtual time, plus throttling and
-  misrouted clients.
+  misrouted clients. Each run is checked against the model, key by key
+  ([0020](../decisions/0020-writer-conformance.md)): a writer without the fence, or without deduplication, is rejected
+  by the model with that safeguard, and accepted by the model without it.
 
 ## What a crash costs
 

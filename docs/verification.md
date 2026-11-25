@@ -17,7 +17,7 @@ are tied together so that **the model and the code cannot drift apart without a 
 | Model replay (model → code) | every behaviour TLC generates is followed step by step by the code | `ModelReplaySpec` |
 | Vocabulary and coverage | the code's actions are the model's, and all of them are exercised on both sides | `VocabularySpec` |
 | Planted drift | wrong code and wrong models are caught | `DriftSpec` |
-| Other seeded simulations | fenced writes and projections through crashes, lost answers and throttling | `FencedWriterSimulation`, `ProjectedWriterSimulation`, `PartialProjectionSimulation` |
+| Writer simulations | fenced writes and projections through crashes, lost answers and throttling; the fenced writer's runs are behaviours of its model, key by key | `FencedWriterSimulation`, `FencedWriterConformanceSpec`, `ProjectedWriterSimulation`, `PartialProjectionSimulation` |
 | Stress tests on the real scheduler | interleavings a single-threaded simulator never runs | `FerryStressSpec`, `PerKeyStressSpec` |
 | TLA+ model checking | every interleaving of the protocol in a small instance, for safety and liveness | [`formal/`](https://github.com/EtaCassiopeia/zio-ferry/tree/main/formal) |
 
@@ -135,7 +135,7 @@ is needed and that the model can notice its absence.
 | Model | Checks | Variants that must fail |
 |---|---|---|
 | `Ferry.tla` (`Ferry`, `FerryBatchOnly`, `FerryMake`) | one call in flight per key; rank order; no input sent twice; turned-away inputs never sent; batches and the waiting room bounded by count and weight; no caller stranded after close; every caller answered | `FerryUnsorted`: out of rank order. `FerryNoBusyGuard`, `FerryNoDirectGuard`: two calls in flight for one key. `FerryNonAtomicAdmission`, `FerryNoDrain`: a caller stranded after close |
-| `FencedWriter.tla` | across processes with arbitrary routing, crashes and lost answers: no input applied twice, every answer true | `FencedWriterUnfenced`, `FencedWriterNoDedup`: an input is applied twice |
+| `FencedWriter.tla` | across processes with arbitrary routing, crashes, lost answers and throttling: no input applied twice, every answer true | `FencedWriterUnfenced`, `FencedWriterNoDedup`: an input is applied twice |
 | `ProjectedWriter.tla` | the same for a commit followed by a fenced projection and a sweeper | `ProjectedWriterUnfencedProject`, `ProjectedWriterEarlyAnswer`, `ProjectedWriterNoResume` |
 | `ProjectedWriterPartial.tla` | the same, for a view of one row per entry | `ProjectedWriterPartialUnconditionalRows`, `ProjectedWriterPartialEarlyClear`, `ProjectedWriterPartialUnfencedClear`, `ProjectedWriterPartialNoResume` |
 
@@ -153,7 +153,8 @@ formal/check.sh path/to/tla2tools.jar         # TLC, every model and variant
 
 - **Bounded evidence.** Trace validation covers the runs that were simulated. Replay covers the behaviours TLC
   generated. Model checking covers every behaviour of small instances of the model.
-- **The writer models are not yet conformance-checked.** `FencedWriter` and the projection models describe deployment
-  patterns across processes. Their simulations check the contract, but not yet the model.
+- **The projection models are not yet conformance-checked.** `FencedWriter` is
+  ([0020](decisions/0020-writer-conformance.md)); `ProjectedWriter` and `ProjectedWriterPartial` describe deployment
+  patterns across processes whose simulations check the contract, but not yet the model.
 - **The simulator is single-threaded.** The stress tests remain the check against real-thread surprises.
 - **Nothing here measures performance.** Benchmarks come before any performance work ([0008](decisions/0008-deferred.md)).

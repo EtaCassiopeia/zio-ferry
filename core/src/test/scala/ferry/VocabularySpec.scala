@@ -27,15 +27,15 @@ object VocabularySpec extends ZIOSpecDefault:
 
   val code: Set[String] = caseNames[Protocol.Action[Any]]
 
-  /** The model's `Vocabulary == {"Enqueue", ...}`, read from `formal/Ferry.tla`. */
-  def model: Set[String] =
-    val text = Files.readString(Tlc.formal.get.resolve("Ferry.tla"))
+  /** A model's `Vocabulary == {"Enqueue", ...}`, read from `formal/<module>.tla`. */
+  def model(module: String = "Ferry"): Set[String] =
+    val text = Files.readString(Tlc.formal.get.resolve(s"$module.tla"))
     val set = text.linesIterator.find(_.startsWith("Vocabulary ==")).get.dropWhile(_ != '{').drop(1).takeWhile(_ != '}')
     set.split(",").map(_.trim.stripPrefix("\"").stripSuffix("\"")).toSet
 
   def spec = suite("Vocabulary")(
     test("the code's actions are exactly the model's") {
-      assertTrue(code.nonEmpty, code == model)
+      assertTrue(code.nonEmpty, code == model())
     },
     test("every action is taken by some simulated run of the code") {
       for seen <- ZIO.attemptBlocking {
@@ -46,7 +46,7 @@ object VocabularySpec extends ZIOSpecDefault:
             action <- run.observation.toSeq.flatMap(_.trace)
           yield Conformance.name(action)).toSet
         }.orDie
-      yield assertTrue(model -- seen == Set.empty[String])
+      yield assertTrue(model() -- seen == Set.empty[String])
     },
     test("every action is taken by some behaviour of the model") {
       for seen <- ZIO.attemptBlocking {
@@ -55,6 +55,6 @@ object VocabularySpec extends ZIOSpecDefault:
             .flatMap(ModelReplaySpec.actionNames)
             .toSet
         }.orDie
-      yield assertTrue(model -- seen == Set.empty[String])
+      yield assertTrue(model() -- seen == Set.empty[String])
     }
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(10.minutes)
