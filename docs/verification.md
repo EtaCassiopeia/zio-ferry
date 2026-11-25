@@ -141,6 +141,13 @@ is needed and that the model can notice its absence.
 
 CI runs every configuration on every change, and fails if a passing model fails or a weakened variant passes.
 
+## Exploring at random, on purpose
+
+A run that found something new could be revisited and varied, as a fuzzer varies inputs. That was measured before
+being adopted ([0021](decisions/0021-explore-at-random.md)). Guidance by forking or mutating kept runs found 82 to
+97 per cent of the protocol-state shapes that fresh random runs found on the same budget, so the simulation draws every
+run from a fresh seed. `sbt "core/Test/runMain ferry.explore.Coverage 200 10 24"` repeats the measurement.
+
 ## Running it
 
 ```sh
