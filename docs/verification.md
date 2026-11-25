@@ -160,6 +160,11 @@ formal/check.sh path/to/tla2tools.jar         # TLC, every model and variant
 
 - **Bounded evidence.** Trace validation covers the runs that were simulated. Replay covers the behaviours TLC
   generated. Model checking covers every behaviour of small instances of the model.
+- **No proof for larger instances.** An inductive invariant checked by Apalache would prove safety for any number of
+  callers and keys, but it stays deferred ([0008](decisions/0008-deferred.md)). It would strengthen what is known about
+  the models, not whether the code matches them, which is what this page is about. Finding an invariant that every step
+  preserves is the bulk of that work, and every bug found so far showed at TLC's small bounds. Revisit if the models
+  outgrow what TLC checks in CI, or if a result for any number of callers is wanted.
 - **The writer models are checked against simulations, not deployments.** Their recorded runs come from the
   simulations' fake stores ([0020](decisions/0020-writer-conformance.md),
   [0022](decisions/0022-projection-conformance.md)). A real store is trusted to behave like its fake: to apply a
