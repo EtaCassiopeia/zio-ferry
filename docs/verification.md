@@ -17,7 +17,7 @@ are tied together so that **the model and the code cannot drift apart without a 
 | Model replay (model → code) | every behaviour TLC generates is followed step by step by the code | `ModelReplaySpec` |
 | Vocabulary and coverage | the code's actions are the model's, and all of them are exercised on both sides | `VocabularySpec` |
 | Planted drift | wrong code and wrong models are caught | `DriftSpec` |
-| Writer simulations | fenced writes and projections through crashes, lost answers and throttling; the fenced writer's runs are behaviours of its model, key by key | `FencedWriterSimulation`, `FencedWriterConformanceSpec`, `ProjectedWriterSimulation`, `PartialProjectionSimulation` |
+| Writer simulations | fenced writes and projections through crashes, lost answers and throttling; every run is a behaviour of its writer's model, key by key, and each safeguard is rejected by the model with it | `FencedWriterSimulation`, `ProjectedWriterSimulation`, `PartialProjectionSimulation`, and a `…ConformanceSpec` for each |
 | Stress tests on the real scheduler | interleavings a single-threaded simulator never runs | `FerryStressSpec`, `PerKeyStressSpec` |
 | TLA+ model checking | every interleaving of the protocol in a small instance, for safety and liveness | [`formal/`](https://github.com/EtaCassiopeia/zio-ferry/tree/main/formal) |
 
@@ -160,8 +160,9 @@ formal/check.sh path/to/tla2tools.jar         # TLC, every model and variant
 
 - **Bounded evidence.** Trace validation covers the runs that were simulated. Replay covers the behaviours TLC
   generated. Model checking covers every behaviour of small instances of the model.
-- **The projection models are not yet conformance-checked.** `FencedWriter` is
-  ([0020](decisions/0020-writer-conformance.md)); `ProjectedWriter` and `ProjectedWriterPartial` describe deployment
-  patterns across processes whose simulations check the contract, but not yet the model.
+- **The writer models are checked against simulations, not deployments.** Their recorded runs come from the
+  simulations' fake stores ([0020](decisions/0020-writer-conformance.md),
+  [0022](decisions/0022-projection-conformance.md)). A real store is trusted to behave like its fake: to apply a
+  conditional write atomically, and to refuse it exactly when the fence says so.
 - **The simulator is single-threaded.** The stress tests remain the check against real-thread surprises.
 - **Nothing here measures performance.** Benchmarks come before any performance work ([0008](decisions/0008-deferred.md)).

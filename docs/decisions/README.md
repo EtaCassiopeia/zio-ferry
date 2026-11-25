@@ -27,3 +27,4 @@ mark them superseded; a changed decision gets a new record. Proposals not yet de
 | [0019](0019-answers-after-commit.md)   | Deliver answers after a step commits                                     | Accepted |
 | [0020](0020-writer-conformance.md)     | Check the fenced writer's simulation against its model                   | Accepted |
 | [0021](0021-explore-at-random.md)      | Explore decisions at random: guidance did not beat chance                | Accepted |
+| [0022](0022-projection-conformance.md) | Check the projected writers' simulations against their models            | Accepted |

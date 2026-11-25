@@ -104,6 +104,7 @@ nav:
           - 0019 Answers after commit: decisions/0019-answers-after-commit.md
           - 0020 Writer conformance: decisions/0020-writer-conformance.md
           - 0021 Explore at random: decisions/0021-explore-at-random.md
+          - 0022 Projection conformance: decisions/0022-projection-conformance.md
       - "Proposal: ordering, lateness, grouping": design/ordering.md
   - API reference: https://etacassiopeia.github.io/zio-ferry/api/
   - Development: development.md
