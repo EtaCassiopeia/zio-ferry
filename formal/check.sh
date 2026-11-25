@@ -64,6 +64,7 @@ for variant in ProjectedWriterUnfencedProject ProjectedWriterEarlyAnswer; do fai
 fails ProjectedWriter ProjectedWriterNoResume "Temporal propert(ies were|y EventuallyProjected was) violated"
 
 passes ProjectedWriterPartial ProjectedWriterPartial
+passes ProjectedWriterPartial ProjectedWriterPartialLiveness
 # The variants list Safety's conjuncts one by one, so that each must break the one it is about.
 fails ProjectedWriterPartial ProjectedWriterPartialUnconditionalRows "Invariant RowsAtMostOnce is violated"
 for variant in ProjectedWriterPartialEarlyClear ProjectedWriterPartialUnfencedClear; do
