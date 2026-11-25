@@ -1,7 +1,10 @@
 package ferry
 
 import zio.*
+import zio.stm.*
 import zio.test.*
+
+import ferry.Protocol.Action
 
 import ProjectedWrite.Outcome
 
@@ -18,6 +21,10 @@ import ProjectedWrite.Outcome
  * The projection is correct only with its fence, the view is complete only with a sweeper, and `Projected` is true only
  * if it is answered after the projection: [[Writer]] and [[Scenario.sweeper]] can switch each off, to show each is
  * needed.
+ *
+ * Every step is recorded, in one STM log, in the order the steps took effect: the actions of each node's ferry (through
+ * its [[Recorder]]) and the store's reads, writes and deliveries, each with who made it, a node or the sweeper.
+ * [[ProjectedWriterConformance]] checks the recording against the model, key by key.
  */
 object ProjectedWriterSimulation:
 
@@ -59,12 +66,35 @@ object ProjectedWriterSimulation:
   /** A command's answer: its position, whether it came back projected, and whether it was in the view then. */
   final case class Ack(position: Int, projected: Boolean, inView: Boolean)
 
+  /**
+   * A step of the run: an action of node `node`'s ferry, or a step of the store. `from` is the node that made a write,
+   * or `None` for the sweeper. A projection carries the log length and the marker it was made from, and its entries.
+   */
+  enum Event:
+    case Ferry(node: Int, action: Action[Int])
+    case Read(node: Int, key: Int)
+    case Commit(node: Int, key: Int, length: Int, ids: Vector[Int])
+    case Project(node: Int, key: Int, length: Int, marker: Int, ids: Vector[Int])
+    case Sweep(key: Int, length: Int, marker: Int, ids: Vector[Int])
+    case DeliverCommit(node: Int, key: Int, length: Int, ids: Vector[Int], applied: Boolean, answered: Boolean)
+    case DeliverProject(
+      from: Option[Int],
+      key: Int,
+      length: Int,
+      marker: Int,
+      ids: Vector[Int],
+      applied: Boolean,
+      answered: Boolean
+    )
+    case Throttle(from: Option[Int], key: Int, commit: Boolean, length: Int, marker: Int, ids: Vector[Int])
+
   final case class Trace(
     records: Map[Int, Record],
     views: Map[Int, Vector[Int]],
     acks: Map[Int, Ack],
     unanswered: Set[Int],
-    overlapping: Boolean
+    overlapping: Boolean,
+    events: Chunk[Event]
   )
 
   val nodes = 2
@@ -77,56 +107,108 @@ object ProjectedWriterSimulation:
    * One record and one view per key. A commit is applied only if the log is still the one its writer read, and leaves
    * the marker as stored. A projection appends the record's unprojected entries to the view and advances the marker,
    * only if the store still holds the record its writer read, unless the writer is unfenced. A late write is applied
-   * after a delay even if its sender is gone, like a request already on the wire.
+   * after a delay even if its sender is gone, like a request already on the wire. Each step is recorded in `events` in
+   * the transaction that takes it; [[as]] gives a node, or the sweeper, its own handle, so that steps say who made
+   * them.
    */
   final class Store(
-    state: Ref[Map[Int, (Record, Vector[Int])]],
-    faults: Ref[List[Fault]],
+    state: TRef[Map[Int, (Record, Vector[Int])]],
+    faults: TRef[List[Fault]],
+    events: TRef[Chunk[Event]],
     onTheWire: Ref[Int],
     fencedProject: Boolean
   ):
 
-    def read(key: Int): UIO[Record] = state.get.map(_.get(key).fold(empty)(_._1))
+    private def record(event: Event): USTM[Unit] = events.update(_ :+ event)
 
-    def view(key: Int): UIO[Vector[Int]] = state.get.map(_.get(key).fold(Vector.empty)(_._2))
+    private def recordOf(key: Int): USTM[Record] = state.get.map(_.get(key).fold(empty)(_._1))
 
-    def pendingKeys: UIO[List[Int]] = state.get.map(_.collect { case (key, (r, _)) if pending(r) => key }.toList)
+    def view(key: Int): UIO[Vector[Int]] = state.get.map(_.get(key).fold(Vector.empty)(_._2)).commit
 
-    def snapshot: UIO[Map[Int, (Record, Vector[Int])]] = state.get
+    def pendingKeys: UIO[List[Int]] =
+      state.get.map(_.collect { case (key, (r, _)) if pending(r) => key }.toList).commit
+
+    def snapshot: UIO[Map[Int, (Record, Vector[Int])]] = state.get.commit
 
     def settled: UIO[Boolean] = onTheWire.get.map(_ == 0)
 
-    def commit(key: Int, before: Record, after: Record): IO[StoreError, Unit] =
-      withFault(projection = false)(applyCommit(key, before, after))
+    /** The store as `who` uses it: a node, or the sweeper (`None`). */
+    final class Handle(who: Option[Int]):
 
-    def project(key: Int, s: Record): IO[StoreError, Unit] =
-      withFault(projection = true)(applyProject(key, s))
+      /**
+       * Reads the key's record. A node's read is a step of its own; the sweeper's is the start of its projection, and a
+       * step only if there is something to project.
+       */
+      def read(key: Int): UIO[Record] =
+        recordOf(key).tap { r =>
+          who match
+            case Some(n) => record(Event.Read(n, key))
+            case None    =>
+              record(Event.Sweep(key, r.log.size, r.projectedUpTo, r.log.drop(r.projectedUpTo))).when(pending(r)).unit
+        }.commit
 
-    private def withFault(projection: Boolean)(apply: IO[StoreError, Unit]): IO[StoreError, Unit] =
-      faults.modify(fs => fs.headOption -> fs.drop(1)).flatMap {
-        case Some(Fault.Throttle)                    => ZIO.fail(StoreError.Throttled)
-        case Some(Fault.RefuseProject) if projection => ZIO.fail(StoreError.Conflict)
-        case Some(Fault.LostResponse)                => apply.ignore *> ZIO.fail(StoreError.TimedOut)
+      def commit(key: Int, before: Record, after: Record): IO[StoreError, Unit] =
+        val node = who.getOrElse(throw IllegalStateException("the sweeper never commits"))
+        val ids  = after.log.drop(before.log.size)
+        record(Event.Commit(node, key, before.log.size, ids)).commit *>
+          withFault(projection = false, Event.Throttle(who, key, true, before.log.size, 0, ids))(
+            applyCommit(node, key, before, after, _)
+          )
+
+      /** A node's projection is a step of its own; the sweeper's was sent by its read. */
+      def project(key: Int, s: Record): IO[StoreError, Unit] =
+        val ids = s.log.drop(s.projectedUpTo)
+        ZIO.foreachDiscard(who)(n => record(Event.Project(n, key, s.log.size, s.projectedUpTo, ids)).commit) *>
+          withFault(projection = true, Event.Throttle(who, key, false, s.log.size, s.projectedUpTo, ids))(
+            applyProject(who, key, s, _)
+          )
+
+    def as(who: Option[Int]): Handle = Handle(who)
+
+    private def withFault(projection: Boolean, refused: Event)(
+      apply: Boolean => IO[StoreError, Unit]
+    ): IO[StoreError, Unit] =
+      faults.modify(fs => fs.headOption -> fs.drop(1)).commit.flatMap {
+        case Some(Fault.Throttle)                    => record(refused).commit *> ZIO.fail(StoreError.Throttled)
+        case Some(Fault.RefuseProject) if projection => record(refused).commit *> ZIO.fail(StoreError.Conflict)
+        case Some(Fault.LostResponse)                => apply(false).ignore *> ZIO.fail(StoreError.TimedOut)
         case Some(Fault.Late(ms))                    =>
-          (onTheWire.update(_ + 1) *> ZIO.sleep(ms.millis) *> apply.ensuring(onTheWire.update(_ - 1))).forkDaemon
+          (onTheWire.update(_ + 1) *> ZIO.sleep(ms.millis) *> apply(true).ensuring(onTheWire.update(_ - 1))).forkDaemon
             .flatMap(_.join)
-        case _ => apply
+        case _ => apply(true)
       }
 
-    private def applyCommit(key: Int, before: Record, after: Record): IO[StoreError, Unit] =
-      state.modify { m =>
-        val (record, view) = m.getOrElse(key, (empty, Vector.empty[Int]))
-        if record.log == before.log then Right(()) -> m.updated(key, (record.copy(log = after.log), view))
-        else Left(StoreError.Conflict)             -> m
-      }.absolve
+    private def applyCommit(node: Int, key: Int, before: Record, after: Record, answered: Boolean) =
+      state
+        .modify { m =>
+          val (stored, view) = m.getOrElse(key, (empty, Vector.empty[Int]))
+          val applies        = stored.log == before.log
+          applies -> (if applies then m.updated(key, (stored.copy(log = after.log), view)) else m)
+        }
+        .tap { applied =>
+          record(
+            Event.DeliverCommit(node, key, before.log.size, after.log.drop(before.log.size), applied, answered)
+          )
+        }
+        .commit
+        .flatMap(applied => ZIO.fail(StoreError.Conflict).unless(applied).unit)
 
-    private def applyProject(key: Int, s: Record): IO[StoreError, Unit] =
-      state.modify { m =>
-        val (record, view) = m.getOrElse(key, (empty, Vector.empty[Int]))
-        if !fencedProject || record == s then
-          Right(()) -> m.updated(key, (record.copy(projectedUpTo = s.log.size), view ++ s.log.drop(s.projectedUpTo)))
-        else Left(StoreError.Conflict) -> m
-      }.absolve
+    private def applyProject(who: Option[Int], key: Int, s: Record, answered: Boolean) =
+      state
+        .modify { m =>
+          val (stored, view) = m.getOrElse(key, (empty, Vector.empty[Int]))
+          val applies        = !fencedProject || stored == s
+          applies -> (if applies then
+                        m.updated(key, (stored.copy(projectedUpTo = s.log.size), view ++ s.log.drop(s.projectedUpTo)))
+                      else m)
+        }
+        .tap { applied =>
+          record(
+            Event.DeliverProject(who, key, s.log.size, s.projectedUpTo, s.log.drop(s.projectedUpTo), applied, answered)
+          )
+        }
+        .commit
+        .flatMap(applied => ZIO.fail(StoreError.Conflict).unless(applied).unit)
 
   private val retry = Schedule.recurs(4) && Schedule.exponential(5.millis)
 
@@ -135,8 +217,35 @@ object ProjectedWriterSimulation:
     if r.log.contains(command.id) then r   -> r.log.indexOf(command.id)
     else r.copy(log = r.log :+ command.id) -> r.log.size
 
-  def write(store: Store, project: (Int, Record) => IO[StoreError, Unit]) =
+  def write(store: Store#Handle, project: (Int, Record) => IO[StoreError, Unit]) =
     ProjectedWrite.wholeRecord(FoldWrite((_: Command).id, store.read, step, store.commit, retry), pending, project)
+
+  private val one = List(Submission(Command(0, 0), 0, misrouted = false))
+
+  /** One command, no faults. */
+  val quiet: Scenario = Scenario(one, Nil, crash = None, crashBeforeProject = None, sweeper = true)
+
+  /**
+   * The writer's projection is late on the wire; meanwhile the sweeper projects the same record. Unfenced, both land.
+   */
+  val lateProjection: Scenario =
+    Scenario(one, List(Fault.Pass, Fault.Late(30)), crash = None, crashBeforeProject = None, sweeper = true)
+
+  /** The writer's projection is refused until its retries are exhausted: the caller is answered Committed. */
+  val refusedProjection: Scenario =
+    Scenario(
+      one,
+      Fault.Pass :: List.fill(6)(Fault.RefuseProject),
+      crash = None,
+      crashBeforeProject = None,
+      sweeper = true
+    )
+
+  /** The node's commit is throttled until its retries are exhausted: the call fails, and the client sends again. */
+  val failedCommit: Scenario = quiet.copy(faults = List.fill(5)(Fault.Throttle))
+
+  /** The node crashes between its commit and its projection: only a sweeper finishes the projection. */
+  val crashBetweenWrites: Scenario = quiet.copy(crashBeforeProject = Some(0))
 
   def scenario: Gen[Any, Scenario] =
     for
@@ -166,11 +275,13 @@ object ProjectedWriterSimulation:
 
   def run(s: Scenario, writer: Writer = Writer()): UIO[Trace] =
     for
-      state     <- Ref.make(Map.empty[Int, (Record, Vector[Int])])
-      faults    <- Ref.make(s.faults)
+      state     <- TRef.make(Map.empty[Int, (Record, Vector[Int])]).commit
+      faults    <- TRef.make(s.faults).commit
+      events    <- TRef.make(Chunk.empty[Event]).commit
       onTheWire <- Ref.make(0)
-      store = Store(state, faults, onTheWire, writer.fencedProject)
-      cfg     <- ZIO.fromEither(PerKeyConfig.make(maxBatchSize = 8, maxInFlightBatches = 4, maxQueueing = 64)).orDie
+      store = Store(state, faults, events, onTheWire, writer.fencedProject)
+      // A batch takes a key's whole lane, as a node of the model takes its whole inbox.
+      cfg     <- ZIO.fromEither(PerKeyConfig.make(maxBatchSize = 32, maxInFlightBatches = 4, maxQueueing = 64)).orDie
       inUse   <- Ref.make(Map.empty[(Int, Int), Int])
       overlap <- Ref.make(false)
       crashed <- Ref.make(Set.empty[Int])
@@ -178,23 +289,36 @@ object ProjectedWriterSimulation:
       scopes  <- ZIO.foreach(0 until nodes)(_ => Scope.make)
       crash = (node: Int) => crashed.update(_ + node) *> scopes(node).close(Exit.unit)
       ferries <- ZIO.foreach(scopes.zipWithIndex) { (scope, node) =>
+        val handle = store.as(Some(node))
         // A node armed to crash between the writes dies at its first projection; its commit has landed.
         val project = (key: Int, r: Record) =>
           armed.modify(a => a(node) -> (a - node)).flatMap { crashNow =>
-            if crashNow then crash(node).forkDaemon *> ZIO.never else store.project(key, r)
+            if crashNow then crash(node).forkDaemon *> ZIO.never else handle.project(key, r)
           }
-        val projected = write(store, project)
-        scope.extend(Ferry.perKey(cfg, (_: Command).key) { (key, commands: NonEmptyChunk[Command]) =>
-          val slot = node -> key
-          inUse
-            .modify(m => m.getOrElse(slot, 0) -> m.updated(slot, m.getOrElse(slot, 0) + 1))
-            .flatMap(n => overlap.set(true).when(n > 0)) *>
-            (if writer.earlyAnswer then
-               projected.fold
-                 .call(key, commands)
-                 .map(_.view.mapValues(Outcome.Projected(_)).toMap[Int, Outcome[StoreError, Int]])
-             else projected.call(key, commands)).ensuring(inUse.update(m => m.updated(slot, m(slot) - 1)))
-        }(projected.outcome))
+        val projected = write(handle, project)
+        val recorder  = new Recorder[Int]:
+          def record(actions: Chunk[Action[Int]]): USTM[Unit] = events.update(_ ++ actions.map(Event.Ferry(node, _)))
+        // Ferry.perKey, with a recorder; the rank is the command's id, which names each caller's command in the trace.
+        scope.extend(
+          Engine.make(
+            Ferry.perKeyLimits(cfg),
+            cfg.maxInFlightBatches,
+            (_: Command).key,
+            _ => 1L,
+            (c: Command) => c.id.toLong,
+            recorder
+          ) { (key, commands: NonEmptyChunk[Command]) =>
+            val slot = node -> key
+            inUse
+              .modify(m => m.getOrElse(slot, 0) -> m.updated(slot, m.getOrElse(slot, 0) + 1))
+              .flatMap(n => overlap.set(true).when(n > 0)) *>
+              (if writer.earlyAnswer then
+                 projected.fold
+                   .call(key, commands)
+                   .map(_.view.mapValues(Outcome.Projected(_)).toMap[Int, Outcome[StoreError, Int]])
+               else projected.call(key, commands)).ensuring(inUse.update(m => m.updated(slot, m(slot) - 1)))
+          }(projected.outcome)
+        )
       }
       acks <- Ref.make(Map.empty[Int, Ack])
       done <- Ref.make(Set.empty[Int])
@@ -216,7 +340,7 @@ object ProjectedWriterSimulation:
         attempt(0).ensuring(done.update(_ + sub.command.id))
       // Clients and the sweeper outlive the fiber that starts them, so they belong to a scope of their own.
       background <- Scope.make
-      sweeper = write(store, store.project)
+      sweeper = write(store.as(None), store.as(None).project)
       _ <- ZIO.when(s.sweeper)(
         (ZIO.sleep(20.millis) *> store.pendingKeys.flatMap(ZIO.foreachDiscard(_)(sweeper.resume(_).ignore))).forever
           .forkIn(background)
@@ -231,12 +355,14 @@ object ProjectedWriterSimulation:
       snapshot   <- store.snapshot
       acked      <- acks.get
       overlapped <- overlap.get
+      recorded   <- events.get.commit
     yield Trace(
       snapshot.view.mapValues(_._1).toMap,
       snapshot.view.mapValues(_._2).toMap,
       acked,
       s.submissions.map(_.command.id).toSet -- acked.keySet,
-      overlapped
+      overlapped,
+      recorded
     )
 
   def violations(s: Scenario, t: Trace): List[String] =

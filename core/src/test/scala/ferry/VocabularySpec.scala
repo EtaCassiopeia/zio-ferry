@@ -30,7 +30,8 @@ object VocabularySpec extends ZIOSpecDefault:
   /** A model's `Vocabulary == {"Enqueue", ...}`, read from `formal/<module>.tla`. */
   def model(module: String = "Ferry"): Set[String] =
     val text = Files.readString(Tlc.formal.get.resolve(s"$module.tla"))
-    val set = text.linesIterator.find(_.startsWith("Vocabulary ==")).get.dropWhile(_ != '{').drop(1).takeWhile(_ != '}')
+    // The set may span lines: everything from `Vocabulary ==` to its closing brace.
+    val set = text.drop(text.indexOf("\nVocabulary ==")).dropWhile(_ != '{').drop(1).takeWhile(_ != '}')
     set.split(",").map(_.trim.stripPrefix("\"").stripSuffix("\"")).toSet
 
   def spec = suite("Vocabulary")(
