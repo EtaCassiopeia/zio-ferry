@@ -43,7 +43,7 @@ instance, and check the properties in each.
   checked by the next test run, with nothing to update by hand.
 - The explorer agrees with TLC on every configuration `Ferry.tla` checked, and catches every weakened variant that can
   be written as code. One variant, admission split from its check, cannot be written at all: `submit` is one method.
-  Each configuration explores in under a second; TLC took several.
+  Each configuration explores in about a second or less, quickly enough to run on every test run.
 - Replay is cheap enough to run on every simulated run, including the heavier runs of up to 24 callers that were too
   costly to hand to TLC.
 - Liveness is weaker: "every caller is answered once the environment stops", on an acyclic graph, rather than TLA+'s
