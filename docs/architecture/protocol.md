@@ -1,9 +1,10 @@
 # The protocol: one pure state machine
 
 Every Ferry, whether built by `make`, `keyed` or `perKey`, runs the same protocol. `Protocol` holds all of its shared
-state in one immutable value and has one method per step. Each step is also an action of the formal model
-[`formal/Ferry.tla`](https://github.com/EtaCassiopeia/zio-ferry/blob/main/formal/Ferry.tla), with the same name and
-parameters. See [0016](../decisions/0016-one-protocol.md) and [0017](../decisions/0017-model-conformance.md).
+state in one immutable value and has one method per step. Because it is pure and its only choices are its
+environment's, it is checked as it stands: every state of small instances is explored, and every simulated run of the
+engine is replayed through it ([verification](../verification.md)). See [0016](../decisions/0016-one-protocol.md) and
+[0023](../decisions/0023-the-code-is-the-model.md).
 
 ![Lanes, the ready line and the worker in motion](../assets/lanes.svg)
 

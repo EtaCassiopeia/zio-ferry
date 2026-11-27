@@ -38,13 +38,13 @@ flowchart TB
   ORD --> P
   FW -. "is a batch call for" .-> BD
   PW -. "commits with" .-> FW
-  M["formal/Ferry.tla"] -. "same actions, same records" .- P
+  X["check/ProtocolSpace<br/>(tests)"] -. "explores, replays runs through" .- P
 ```
 
 | Source | Role |
 |---|---|
 | `Ferry.scala` | The public trait and the constructors: `make` and `keyed` are the one-key case, `perKey` the general one |
-| `Protocol.scala` | The pure state machine: every scheduling decision, one method per model action |
+| `Protocol.scala` | The pure state machine: every scheduling decision, one method per step |
 | `Engine.scala` | The effectful shell: admission, workers, direct calls, cancellation, close |
 | `Recorder.scala` | The seam between a step and its trace |
 | `FerryConfig.scala`, `PerKeyConfig.scala` | Validated settings |
@@ -63,9 +63,8 @@ flowchart TB
 | When a batch leaves | full, or `maxBatchDelay` after its oldest input | the same; with zero delay, as soon as the key is free |
 | Bounds | count | count and weight |
 
-Both run the same [protocol](protocol.md) on the same [engine](engine.md), and both are checked against the same
-model, [`formal/Ferry.tla`](https://github.com/EtaCassiopeia/zio-ferry/blob/main/formal/Ferry.tla). See
-[0016](../decisions/0016-one-protocol.md).
+Both run the same [protocol](protocol.md) on the same [engine](engine.md), and both are checked by exploring that
+protocol directly ([verification](../verification.md)). See [0016](../decisions/0016-one-protocol.md).
 
 ## Beyond one process
 

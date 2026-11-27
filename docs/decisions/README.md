@@ -22,9 +22,10 @@ mark them superseded; a changed decision gets a new record. Proposals not yet de
 | [0014](0014-commit-then-project.md)    | Package "commit, then project" as `ProjectedWrite`, marker in the store | Accepted |
 | [0015](0015-per-entry-projection.md)   | Project per entry: a projection may land for some entries, and `Committed` says why | Accepted |
 | [0016](0016-one-protocol.md)           | One protocol for every constructor, as a pure state machine in one `TRef` | Accepted |
-| [0017](0017-model-conformance.md)      | Check the code against the model in both directions                      | Accepted |
+| [0017](0017-model-conformance.md)      | Check the code against the model in both directions                      | Accepted; protocol half superseded by 0023 |
 | [0018](0018-deterministic-simulation.md) | Simulate deterministically: a run is a function of its decisions       | Accepted |
 | [0019](0019-answers-after-commit.md)   | Deliver answers after a step commits                                     | Accepted |
 | [0020](0020-writer-conformance.md)     | Check the fenced writer's simulation against its model                   | Accepted |
 | [0021](0021-explore-at-random.md)      | Explore decisions at random: guidance did not beat chance                | Accepted |
 | [0022](0022-projection-conformance.md) | Check the projected writers' simulations against their models            | Accepted |
+| [0023](0023-the-code-is-the-model.md)  | Check the protocol directly: the code is the model                       | Accepted |

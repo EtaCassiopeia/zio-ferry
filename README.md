@@ -41,9 +41,10 @@ idempotent "read once, apply, conditional write" call to pair it with, and `Proj
 fenced projection into a read-side view, per record or per entry.
 
 Every caller gets an answer, overload fails fast, and per-key order holds. This is checked by deterministic
-simulations, stress tests and TLA+ models with weakened variants that must fail. The code and its model are kept in
-step mechanically: every step of the code is an action of the model, recorded runs are checked against the model by
-TLC, and the model's behaviours are replayed through the code ([verification](https://etacassiopeia.github.io/zio-ferry/verification/)).
+simulations, stress tests and weakened variants that must fail. The protocol is checked as it stands, with no second
+description to drift from: every state of small instances is explored, and every simulated run of the engine is
+replayed through the protocol with its properties checked after each step. The patterns for running on a fleet are
+TLA+ models, each checked against its simulation ([verification](https://etacassiopeia.github.io/zio-ferry/verification/)).
 
 ```sh
 sbt testFull
