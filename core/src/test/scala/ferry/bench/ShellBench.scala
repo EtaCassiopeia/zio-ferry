@@ -1,0 +1,97 @@
+package ferry.bench
+
+import zio.*
+
+import ferry.{Ferry, FerryConfig, PerKeyConfig}
+
+/**
+ * Compares the two shells under contention: the STM shell (one transaction per step on one `TRef`) and the single-owner
+ * shell (one fiber processes commands from a queue). Same protocol, same workloads, same JVM.
+ *
+ * Each workload is run with 1 to 1024 concurrent callers, each making its share of the calls back to back. The batch
+ * call does no work (or sleeps, in the last workload), so the shell's own cost is what is measured. Reports the median
+ * of the measured rounds: calls per second, and the 50th and 99th percentile of one call's latency.
+ *
+ * Run: `core/Test/runMain ferry.bench.ShellBench` (forked, with enough heap).
+ */
+object ShellBench extends ZIOAppDefault:
+
+  final case class Workload(name: String, build: URIO[Scope, Ferry[Int, Nothing, Int]], calls: Int = 200_000)
+
+  private val total   = 200_000
+  private val rounds  = 3
+  private val callers = List(1, 16, 256, 1024)
+  private val shells  = List("stm", "loop")
+
+  private def make(delay: Duration, call: NonEmptyChunk[Int] => UIO[Int]) =
+    ZIO
+      .fromEither(
+        FerryConfig.make(maxBatchSize = 64, maxBatchDelay = delay, maxInFlightBatches = 4, maxQueueing = total)
+      )
+      .orDie
+      .flatMap(cfg => Ferry.make(cfg)(call)((i, _) => i))
+
+  private def perKey(keys: Int) =
+    ZIO
+      .fromEither(PerKeyConfig.make(maxBatchSize = 64, maxInFlightBatches = 8, maxQueueing = total))
+      .orDie
+      .flatMap(cfg =>
+        Ferry.perKey(cfg, (i: Int) => i % keys)((_, batch: NonEmptyChunk[Int]) => ZIO.succeed(batch.size))((i, _) => i)
+      )
+
+  private val workloads = List(
+    Workload("make, no-op call", make(Duration.Zero, b => ZIO.succeed(b.size))),
+    Workload("perKey, 1000 keys", perKey(1000)),
+    Workload("perKey, 4 hot keys", perKey(4)),
+    Workload("make, 1 ms call", make(Duration.Zero, b => ZIO.sleep(1.milli).as(b.size)), 5_000),
+    Workload("make, 1 ms call, 200 µs batch delay", make(200.micros, b => ZIO.sleep(1.milli).as(b.size)), 5_000)
+  )
+
+  final case class Result(callsPerSecond: Double, p50: Long, p99: Long)
+
+  private def once(w: Workload, n: Int, calls: Int): UIO[Result] =
+    ZIO.scoped {
+      w.build.flatMap { ferry =>
+        val each      = (calls / n) max 1
+        val latencies = new Array[Long](each * n)
+        for
+          start <- Clock.nanoTime
+          _     <- ZIO.foreachParDiscard(0 until n) { c =>
+            ZIO.foreachDiscard(0 until each) { j =>
+              val i = c * each + j
+              Clock.nanoTime.flatMap(t0 => ferry(i).ignore *> Clock.nanoTime.map(t1 => latencies(i) = t1 - t0))
+            }
+          }
+          end <- Clock.nanoTime
+        yield
+          java.util.Arrays.sort(latencies)
+          Result(
+            latencies.length / ((end - start) / 1e9),
+            latencies(latencies.length / 2),
+            latencies(latencies.length * 99 / 100)
+          )
+      }
+    }
+
+  private def measure(shell: String, w: Workload, n: Int): UIO[Result] =
+    ZIO.succeed(java.lang.System.setProperty("ferry.shell", shell)) *>
+      once(w, n, w.calls / 10) *> // warm-up
+      ZIO.foreach(1 to rounds)(_ => once(w, n, w.calls)).map(rs => rs.sortBy(_.callsPerSecond).apply(rs.size / 2))
+
+  private def us(nanos: Long) = f"${nanos / 1000.0}%.0f µs"
+
+  def run =
+    for
+      _ <- Console.printLine(s"calls per run: up to $total, median of $rounds rounds").orDie
+      only = Option(java.lang.System.getProperty("bench.only"))
+      _ <- ZIO.foreachDiscard(workloads.filter(w => only.forall(w.name.contains))) { w =>
+        Console.printLine(s"\n## ${w.name}\n| callers | shell | calls/s | p50 | p99 |\n|---|---|---|---|---|").orDie *>
+          ZIO.foreachDiscard(callers) { n =>
+            ZIO.foreachDiscard(shells) { shell =>
+              measure(shell, w, n).flatMap { r =>
+                Console.printLine(f"| $n | $shell | ${r.callsPerSecond}%.0f | ${us(r.p50)} | ${us(r.p99)} |").orDie
+              }
+            }
+          }
+      }
+    yield ()
