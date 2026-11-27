@@ -3,14 +3,14 @@ package ferry.check
 import zio.*
 import zio.test.*
 
-import ferry.{DriftSpec, Engine, Protocol}
+import ferry.{Engine, Protocol}
 import ferry.Protocol.{Action, Admission, Step}
 import ferry.check.ProtocolSpace.Config
 import ferry.testkit.check.StateSpace.Verdict
 
 /**
- * The protocol checked directly, without a second description: every state of small instances, the same bounds and
- * properties as the TLC configurations of `formal/Ferry.tla`.
+ * The protocol checked directly, without a second description: every state of small instances, every safety property,
+ * and liveness once the environment stops. The drifts planted in the engine's rules are in [[ferry.DriftSpec]].
  */
 object ProtocolSpaceSpec extends ZIOSpecDefault:
 
@@ -90,7 +90,7 @@ object ProtocolSpaceSpec extends ZIOSpecDefault:
     case _                                  => false
 
   def spec = suite("The protocol, checked directly")(
-    suite("the configurations TLC checks hold")(
+    suite("small instances of every configuration hold")(
       test("perKey with direct calls")(timed("perKey", Config.perKey).map(v => assertTrue(v.holds))),
       test("perKey, every input batched")(timed("batchOnly", Config.batchOnly).map(v => assertTrue(v.holds))),
       test("make")(timed("make", Config.make).map(v => assertTrue(v.holds))),
@@ -112,27 +112,7 @@ object ProtocolSpaceSpec extends ZIOSpecDefault:
           .map(v => assertTrue(violates("NoneStrandedAfterClose")(v)))
       }
     ),
-    suite("the planted code drifts are caught")(
-      test("ignoring the weight limit, by an invariant of the model") {
-        timed("IgnoreWeightLimit", Config.weighted, DriftSpec.IgnoreWeightLimit)
-          .map(v => assertTrue(violates("BatchBounded")(v)))
-      },
-      test("serving the last ready lane, only by the reference property") {
-        for
-          model <- ZIO.succeed(
-            ProtocolSpace.check(Config.batchOnly, DriftSpec.ServeLastReady, ProtocolSpace.invariants)
-          )
-          ref <- timed("ServeLastReady", Config.batchOnly, DriftSpec.ServeLastReady)
-        yield assertTrue(model.holds, violates("FirstComeFirstServed")(ref))
-      },
-      test("leaving a cancelled input in its lane, only by the reference property") {
-        for
-          model <- ZIO.succeed(
-            ProtocolSpace.check(Config.perKey, DriftSpec.KeepCancelledInLane, ProtocolSpace.invariants)
-          )
-          ref <- timed("KeepCancelledInLane", Config.perKey, DriftSpec.KeepCancelledInLane)
-        yield assertTrue(model.holds, violates("CancelledNeverSent")(ref))
-      },
+    suite("liveness")(
       test("a lane left blocked after its key is freed, by bounded liveness") {
         timed("ForgetBlockedLane", Config.batchOnly, ForgetBlockedLane).map {
           case _: Verdict.Unsettled[?, ?] => assertCompletes
