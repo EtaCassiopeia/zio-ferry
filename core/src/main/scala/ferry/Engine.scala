@@ -31,7 +31,7 @@ private[ferry] object Engine:
 
   /**
    * The steps the shell applies. The standard rules are the protocol's own; tests substitute deliberately wrong rules
-   * to show that a drift between the code and the model is caught.
+   * to show that a drift in the protocol's rules is caught.
    */
   trait Rules:
     def submit[K, X](p: Protocol[K, X], key: K, value: X, weight: Long, rank: Long, now: Long) =

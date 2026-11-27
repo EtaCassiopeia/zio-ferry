@@ -28,6 +28,9 @@ import ferry.testkit.tla.{Alter, Tlc, TraceValidation, Value}
  */
 object WriterTraces:
 
+  /** TLC computes with 32-bit integers: unbounded limits are written as this. */
+  val Unbounded: Long = 100_000_000L
+
   /** What a scan of a run knows: each caller's key and command, and each running batch, by node; and the steps. */
   final case class Scan(
     commands: Map[(Int, Long), (Int, Int)] = Map.empty,

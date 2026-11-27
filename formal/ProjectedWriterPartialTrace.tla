@@ -6,10 +6,9 @@
 (*                                                                         *)
 (* The simulation records Ferry.perKey's actions and the store's reads,    *)
 (* writes and deliveries in one STM log, so a trace is in the order the   *)
-(* steps took effect. Each event has the shape of the model's `act`. As   *)
-(* in FerryTrace.tla, each step is one step of Next whose `act` is the    *)
-(* next event, and the violation of `Unfinished` is the verdict           *)
-(* "accepted".                                                             *)
+(* steps took effect. Each event has the shape of the model's `act`.     *)
+(* Each step is one step of Next whose `act` is the next event, and the   *)
+(* violation of `Unfinished` is the verdict "accepted".                   *)
 (***************************************************************************)
 EXTENDS ProjectedWriterPartial, TLC
 

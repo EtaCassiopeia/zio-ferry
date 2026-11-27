@@ -17,13 +17,14 @@ import ferry.testkit.sim.{Decisions, Simulator}
  * first, and each call's latency and outcome. A run is therefore a function of (scenario, decisions), and replays
  * exactly from them.
  *
- * Each run is checked against Ferry's documented contract by [[FerrySimulation.violations]], independently of the
- * model, and its recorded trace is what trace validation checks against the model. The two divide the work:
+ * Each run is checked against Ferry's documented contract by [[FerrySimulation.violations]], and its recorded trace is
+ * replayed through the pure protocol with every property checked ([[check.ProtocolSpace.replay]]). The two divide the
+ * work:
  *
- *   - the contract checks what the model cannot see: virtual time (no partial batch leaves before its deadline), the
+ *   - the contract checks what the protocol cannot see: virtual time (no partial batch leaves before its deadline), the
  *     user's call and what each caller is answered from it, and how many calls run at once;
- *   - the model checks what depends on the order of protocol steps, which only the trace records: per-key order, that a
- *     caller who gave up is never sent, and that nothing is taken after close.
+ *   - the properties check what depends on the order of protocol steps, which only the trace records: per-key order,
+ *     that a caller who gave up is never sent, and that nothing is taken after close.
  */
 object FerrySimulation:
 
@@ -75,8 +76,6 @@ object FerrySimulation:
     timeline: Chunk[Event]
   ):
     def trace: Chunk[Action[String]] = timeline.map(_.action)
-
-    def recorded(s: Scenario): Conformance.Recorded[String] = Conformance.Recorded(s.limits, s.workers, trace, identity)
 
     /**
      * What the run did, comparable across runs: an `Exit` carries fiber ids and exception instances that differ in

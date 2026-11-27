@@ -105,9 +105,9 @@ object PartialProjectionConformance:
       commands,
       nodes,
       ListMap(
-        "MaxCrashes"        -> Conformance.Unbounded.toString,
-        "MaxFaults"         -> Conformance.Unbounded.toString,
-        "MaxGiveUps"        -> Conformance.Unbounded.toString,
+        "MaxCrashes"        -> WriterTraces.Unbounded.toString,
+        "MaxFaults"         -> WriterTraces.Unbounded.toString,
+        "MaxGiveUps"        -> WriterTraces.Unbounded.toString,
         "ConditionalRows"   -> WriterTraces.bool(model.conditionalRows),
         "ClearWhenComplete" -> WriterTraces.bool(model.clearWhenComplete),
         "FencedClear"       -> WriterTraces.bool(model.fencedClear),
