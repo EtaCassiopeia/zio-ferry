@@ -54,19 +54,6 @@ private[ferry] object Engine:
     recorder: Recorder[K] = Recorder.off,
     rules: Rules = Rules.standard
   )(call: (K, NonEmptyChunk[I]) => ZIO[R, E, B])(extract: (I, B) => A): URIO[R & Scope, Ferry[I, E, A]] =
-    if java.lang.System.getProperty("ferry.shell", "stm") == "loop" then
-      Loop.make(limits, workers, key, weigh, rank, recorder, rules)(call)(extract)
-    else stm(limits, workers, key, weigh, rank, recorder, rules)(call)(extract)
-
-  private def stm[R, E, K, I, B, A](
-    limits: Protocol.Limits,
-    workers: Int,
-    key: I => K,
-    weigh: I => Long,
-    rank: I => Long,
-    recorder: Recorder[K],
-    rules: Rules
-  )(call: (K, NonEmptyChunk[I]) => ZIO[R, E, B])(extract: (I, B) => A): URIO[R & Scope, Ferry[I, E, A]] =
     for
       state  <- TRef.make(Protocol.empty[K, Entry[I, E, A]](limits)).commit
       direct <- Scope.make
