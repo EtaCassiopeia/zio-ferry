@@ -1,6 +1,7 @@
 # 0002. Verify with tests, model checking and mutation testing together
 
-Status: Accepted. The mutation-testing layer is superseded by [0009](0009-drop-mutation-testing.md).
+Status: Accepted. The mutation-testing layer is superseded by [0009](0009-drop-mutation-testing.md); the layers now are
+those of [verification](../verification.md) ([0017](0017-model-conformance.md), [0018](0018-deterministic-simulation.md)).
 
 ## Context
 

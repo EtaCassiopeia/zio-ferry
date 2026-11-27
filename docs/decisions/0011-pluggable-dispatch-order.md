@@ -33,7 +33,7 @@ counts from a partial batch's oldest input by arrival, whatever its rank.
 ## Consequences
 
 - No new error and no flag passed to the batch call: a late input carries its own time, and the store decides.
-- `formal/PerKey.tla` checks that inputs waiting together are sent in rank order, ties by admission, and lets an input
+- `formal/PerKey.tla` (now `formal/Ferry.tla`, since [0016](0016-one-protocol.md)) checks that inputs waiting together are sent in rank order, ties by admission, and lets an input
   admitted after another left the lane follow it; `PerKeyUnsorted` (joining the back of the lane) must fail.
   `LanesSpec` and the simulations check the same against independent models.
 - Deferred, each until a store needs it:

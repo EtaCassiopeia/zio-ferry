@@ -1,0 +1,83 @@
+<svg width="960" height="520" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 520" role="img" aria-labelledby="t d">
+  <title id="t">A pure protocol core inside a transactional shell, with a recording seam</title>
+  <desc id="d">Fibers at the top call into a shell. The shell applies one pure protocol step per STM transaction, writing the new state and recording the step's actions together. The user's call runs outside any transaction. The recorder is off in production and appends to a trace in tests; the trace is checked against the TLA+ model, whose act records have the same shape.</desc>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#6b7280"/>
+    </marker>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#2e8b57"/>
+    </marker>
+  </defs>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #1f2430; }
+    .h { font-size: 17px; font-weight: 650; }
+    .t { font-size: 14px; }
+    .m { font-size: 13px; fill: #6b7280; }
+    .c { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  </style>
+  <rect x="0" y="0" width="960" height="520" rx="14" fill="#fbfaf7"/>
+
+  <!-- Fibers -->
+  <text x="30" y="40" class="m">FIBERS</text>
+  <rect x="30" y="52" width="150" height="40" rx="8" fill="#ffffff" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="105" y="77" class="t" text-anchor="middle">callers</text>
+  <rect x="200" y="52" width="150" height="40" rx="8" fill="#ffffff" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="275" y="77" class="t" text-anchor="middle">workers</text>
+  <rect x="370" y="52" width="150" height="40" rx="8" fill="#ffffff" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="445" y="77" class="t" text-anchor="middle">direct calls</text>
+  <line x1="105" y1="92" x2="105" y2="132" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="275" y1="92" x2="275" y2="132" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a)"/>
+  <line x1="445" y1="92" x2="445" y2="132" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a)"/>
+
+  <!-- Shell -->
+  <rect x="20" y="136" width="600" height="250" rx="12" fill="#e8f0fa" stroke="#2f6db5" stroke-width="2"/>
+  <text x="38" y="162" class="h">The shell (Engine)</text>
+  <text x="38" y="182" class="m">nothing else touches the state</text>
+
+  <!-- transaction -->
+  <rect x="38" y="196" width="400" height="172" rx="10" fill="#ffffff" stroke="#2f6db5" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <text x="54" y="220" class="t" font-weight="600">one STM transaction per step</text>
+  <text x="54" y="246" class="c">p  = state.get</text>
+  <text x="54" y="268" class="c" xml:space="preserve">s  = step(p)        <tspan fill="#6b7280">// pure</tspan></text>
+  <text x="54" y="290" class="c">state.set(s.next)</text>
+  <text x="54" y="312" class="c" fill="#d97706">recorder.record(s.actions)</text>
+  <text x="54" y="340" class="m">all of it commits, or none of it does</text>
+
+  <!-- outside -->
+  <rect x="458" y="196" width="146" height="172" rx="10" fill="#ffffff" stroke="#6b7280" stroke-width="1.5"/>
+  <text x="531" y="222" class="t" text-anchor="middle" font-weight="600">outside any</text>
+  <text x="531" y="240" class="t" text-anchor="middle" font-weight="600">transaction</text>
+  <text x="531" y="272" class="c" text-anchor="middle">call(batch)</text>
+  <text x="531" y="294" class="c" text-anchor="middle">key, weigh</text>
+  <text x="531" y="316" class="c" text-anchor="middle">answers sent</text>
+  <text x="531" y="336" class="m" text-anchor="middle">after commit</text>
+
+  <!-- Protocol -->
+  <line x1="238" y1="386" x2="238" y2="414" stroke="#6b7280" stroke-width="1.5" marker-end="url(#a)"/>
+  <rect x="20" y="418" width="600" height="84" rx="12" fill="#ffffff" stroke="#1f2430" stroke-width="2"/>
+  <text x="38" y="444" class="h">Protocol: one immutable value, pure methods</text>
+  <text x="38" y="468" class="c">submit · due · take · complete · completeDirect · cancel · close</text>
+  <text x="38" y="490" class="m">no clock, no effects; which worker owns which batch is part of this value</text>
+
+  <!-- Recorder and trace -->
+  <path d="M438 308 H448 V378 H640 V140 H656" fill="none" stroke="#d97706" stroke-width="2" marker-end="url(#a)"/>
+  <rect x="660" y="60" width="280" height="150" rx="12" fill="#fff7ea" stroke="#d97706" stroke-width="2"/>
+  <text x="678" y="88" class="h">Recorder (the seam)</text>
+  <text x="678" y="114" class="t">production: off, costs nothing</text>
+  <text x="678" y="138" class="t">tests: appends to a trace,</text>
+  <text x="678" y="158" class="t">in the same transaction, so the</text>
+  <text x="678" y="178" class="t">trace order is the commit order</text>
+
+  <line x1="800" y1="210" x2="800" y2="292" stroke="#2e8b57" stroke-width="2" marker-end="url(#g)"/>
+  <text x="812" y="252" class="m">trace validation</text>
+
+  <rect x="660" y="296" width="280" height="206" rx="12" fill="#e6f2ea" stroke="#2e8b57" stroke-width="2"/>
+  <text x="678" y="324" class="h">TLA+ model</text>
+  <text x="678" y="350" class="t">same action names,</text>
+  <text x="678" y="370" class="t">same record shape:</text>
+  <text x="678" y="400" class="c">act = [name |-&gt; "Take",</text>
+  <text x="678" y="420" class="c" xml:space="preserve">       worker |-&gt; "w1",</text>
+  <text x="678" y="440" class="c" xml:space="preserve">       key |-&gt; "k1",</text>
+  <text x="678" y="460" class="c" xml:space="preserve">       batch |-&gt; &lt;&lt;3, 5&gt;&gt;]</text>
+</svg>

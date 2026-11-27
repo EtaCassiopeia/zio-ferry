@@ -7,8 +7,10 @@ import zio.test.*
  * Compares a real Ferry, step by step, with an executable specification of its batching rules.
  *
  * Batch calls here complete instantly, so the only things deciding batch composition and timing are arrivals and the
- * passage of time. Each step settles the TestClock before the next, which makes the run deterministic and lets the
- * model predict every batch, its contents in order, and the instant it is dispatched.
+ * passage of time. The model predicts every batch, its contents in order, and the instant it is dispatched. Each step
+ * waits, on the live clock and for a bounded time, until the real Ferry has dispatched what the model predicts by then:
+ * otherwise a worker slow to take a ready batch would let the next arrival join it. A batch that is wrong, early, late
+ * or merged is never awaited into agreement, so it still fails the comparison.
  */
 object FerryModelSpec extends ZIOSpecDefault:
 
@@ -52,6 +54,19 @@ object FerryModelSpec extends ZIOSpecDefault:
       )
     yield (maxBatchSize, maxBatchDelayMs, maxInFlightBatches, ops)
 
+  /** Waits until `fiber` is parked awaiting its result, or already done: either way, its input was admitted. */
+  private def admitted(fiber: Fiber.Runtime[?, ?]): UIO[Unit] =
+    // A fiber that has not started yet also reports Suspended, with no trace: it must have run and then parked.
+    fiber.status.repeatUntil {
+      case Fiber.Status.Suspended(_, trace, _) => trace != Trace.empty
+      case Fiber.Status.Done                   => true
+      case _                                   => false
+    }.unit
+
+  /** Waits, for a bounded time on the live clock, until the batches dispatched so far are the ones predicted. */
+  private def settled[A](log: Ref[A], predicted: A): UIO[Unit] =
+    Live.live((ZIO.yieldNow *> log.get).repeatUntil(_ == predicted).timeout(5.seconds)).unit
+
   private def runReal(maxBatchSize: Int, maxBatchDelayMs: Int, maxInFlightBatches: Int, ops: List[Op]) =
     ZIO.scoped {
       for
@@ -63,9 +78,12 @@ object FerryModelSpec extends ZIOSpecDefault:
         ferry <- Ferry.make(cfg) { (ids: NonEmptyChunk[Int]) =>
           Clock.nanoTime.flatMap(t => log.update(_ :+ (ids.toVector -> (t - start) / 1_000_000)))
         }((id, _) => id)
-        _ <- ZIO.foldLeft(ops)(0) {
-          case (id, Op.Submit)      => ferry(id).fork *> TestClock.adjust(Duration.Zero).as(id + 1)
-          case (id, Op.Advance(ms)) => TestClock.adjust(ms.millis).as(id)
+        _ <- ZIO.foldLeft(ops)((0, Model(maxBatchSize, maxBatchDelayMs.toLong))) { case ((id, model), op) =>
+          val next    = model.step(op)
+          val applied = op match
+            case Op.Submit      => ferry(id).fork.flatMap(admitted) *> TestClock.adjust(Duration.Zero).as(id + 1)
+            case Op.Advance(ms) => TestClock.adjust(ms.millis).as(id)
+          applied.zipLeft(settled(log, next.dispatched)).map(_ -> next)
         }
         out <- log.get
       yield out

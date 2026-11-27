@@ -52,7 +52,8 @@ object Simulator:
   def pick[A](point: String, values: NonEmptyChunk[A]): UIO[A] =
     choose(point, values.size).map(values(_))
 
-  private val current: FiberRef[Option[Driver]] = Unsafe.unsafe(FiberRef.unsafe.make(Option.empty[Driver]))
+  private val current: FiberRef[Option[Driver]] =
+    Unsafe.unsafe(u ?=> FiberRef.unsafe.make(Option.empty[Driver])(using u))
 
   private val driving = ThreadLocal[Driver]()
 

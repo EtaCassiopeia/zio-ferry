@@ -37,12 +37,16 @@ jobs:
       # The conformance suites check runs against the TLA+ model with TLC; without it they fail as skipped.
       - name: Fetch TLA+ tools
         run: curl -fsSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
+      # One argument, commands separated by `;`: the sbt 2 runner joins separate arguments into one command line, so
+      # `test` would take the other commands as test filters and run nothing. testFull, not test: in sbt 2 `test` is
+      # incremental, and skips suites whose inputs did not change.
       - run: >-
-          sbt "++${{ matrix.scala-version }} test"
-          "++${{ matrix.scala-version }} examples/runMain ferry.examples.PricingAggregation"
-          "++${{ matrix.scala-version }} examples/runMain ferry.examples.OrderedWrites"
-          "++${{ matrix.scala-version }} examples/runMain ferry.examples.ProjectedWrites"
-          "++${{ matrix.scala-version }} examples/runMain ferry.examples.ProjectedRows"
+          sbt "++${{ matrix.scala-version }};
+          testFull;
+          examples/runMain ferry.examples.PricingAggregation;
+          examples/runMain ferry.examples.OrderedWrites;
+          examples/runMain ferry.examples.ProjectedWrites;
+          examples/runMain ferry.examples.ProjectedRows"
 
   formal:
     runs-on: ubuntu-latest

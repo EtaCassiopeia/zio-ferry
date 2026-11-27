@@ -1,0 +1,60 @@
+<svg width="900" height="470" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 470" role="img" aria-labelledby="t d">
+  <title id="t">Granularity drift: one model step against two code steps</title>
+  <desc id="d">A first-draft model delivers a write and answers the clients in one step. The code does it in two steps, Deliver
+  and Reply, and a crash can fall between them. The model with the code's steps splits the step, so the crash has a state to land in.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #1f2430; }
+    .label { font-size: 15px; font-weight: 600; }
+    .sub { font-size: 13px; fill: #6b7280; }
+    .box { font-size: 14px; font-weight: 600; }
+    .small { font-size: 13px; }
+  </style>
+  <rect x="0" y="0" width="900" height="470" rx="14" fill="#fbfaf7"/>
+
+  <!-- time axis -->
+  <line x1="230" y1="34" x2="860" y2="34" stroke="#6b7280" stroke-width="1.2"/>
+  <polygon points="860,30 870,34 860,38" fill="#6b7280"/>
+  <text x="230" y="24" class="sub">time</text>
+
+  <!-- row 1: first-draft model -->
+  <text x="30" y="88" class="label" fill="#2e8b57">First-draft model</text>
+  <text x="30" y="108" class="sub">one step</text>
+  <rect x="230" y="60" width="590" height="66" rx="8" fill="#e6f2ea" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="250" y="86" class="box">Deliver</text>
+  <text x="250" y="108" class="small">the append lands, the node learns the result, its clients are answered</text>
+
+  <!-- row 2: code -->
+  <text x="30" y="208" class="label" fill="#2f6db5">Code</text>
+  <text x="30" y="228" class="sub">two steps</text>
+  <rect x="230" y="180" width="220" height="66" rx="8" fill="#e5eef8" stroke="#2f6db5" stroke-width="1.5"/>
+  <text x="250" y="206" class="box">Deliver</text>
+  <text x="250" y="228" class="small">the store appends</text>
+  <line x1="450" y1="213" x2="590" y2="213" stroke="#2f6db5" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <polygon points="590,209 600,213 590,217" fill="#2f6db5"/>
+  <text x="537" y="268" class="small" fill="#6b7280">answer travels back</text>
+  <rect x="600" y="180" width="220" height="66" rx="8" fill="#e5eef8" stroke="#2f6db5" stroke-width="1.5"/>
+  <text x="620" y="206" class="box">Reply</text>
+  <text x="620" y="228" class="small">the node answers its clients</text>
+
+  <!-- row 3: model with the code's steps -->
+  <text x="30" y="328" class="label" fill="#2e8b57">Matching model</text>
+  <text x="30" y="348" class="sub">same steps as the code</text>
+  <rect x="230" y="300" width="220" height="66" rx="8" fill="#e6f2ea" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="250" y="326" class="box">Deliver</text>
+  <text x="250" y="348" class="small">the store appends</text>
+  <rect x="600" y="300" width="220" height="66" rx="8" fill="#e6f2ea" stroke="#2e8b57" stroke-width="1.5"/>
+  <text x="620" y="326" class="box">Reply</text>
+  <text x="620" y="348" class="small">or Crash, then Abandon</text>
+
+  <!-- the crash line -->
+  <line x1="525" y1="50" x2="525" y2="385" stroke="#c2410c" stroke-width="2" stroke-dasharray="6 5"/>
+  <circle cx="525" cy="76" r="11" fill="#fbfaf7" stroke="#c2410c" stroke-width="2"/>
+  <text x="525" y="81" text-anchor="middle" class="box" fill="#c2410c">✕</text>
+  <polygon points="519,198 531,198 523,213 533,213 515,236 520,218 511,218" fill="#c2410c"/>
+  <circle cx="525" cy="333" r="9" fill="#c2410c"/>
+
+  <!-- annotations on the right of the crash line -->
+  <text x="30" y="410" class="small"><tspan fill="#c2410c" font-weight="600">Crash here.</tspan> The code: the write is in the store, but no client was told, so they all send again.</text>
+  <text x="30" y="432" class="small">The first-draft model has no state between the write and the answer: to it, this run is impossible, and TLC rejects it.</text>
+  <text x="30" y="454" class="small">The matching model has one, so the run is accepted, and the safety properties are checked through that crash too.</text>
+</svg>

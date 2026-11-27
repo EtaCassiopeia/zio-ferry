@@ -39,17 +39,23 @@ misconfiguration fails at startup, not on the first call.
 
 ## Run the examples
 
-Two runnable programs live in [`examples/`](https://github.com/EtaCassiopeia/zio-ferry/tree/main/examples/src/main/scala/ferry/examples):
+Four runnable programs live in [`examples/`](https://github.com/EtaCassiopeia/zio-ferry/tree/main/examples/src/main/scala/ferry/examples):
 
 ```sh
 sbt "examples/runMain ferry.examples.PricingAggregation"
 sbt "examples/runMain ferry.examples.OrderedWrites"
+sbt "examples/runMain ferry.examples.ProjectedWrites"
+sbt "examples/runMain ferry.examples.ProjectedRows"
 ```
 
 - **PricingAggregation** coalesces concurrent price lookups and wraps each batch call in a timeout, a retry and a
   circuit breaker.
 - **OrderedWrites** appends entries to per-entity logs through `perKey`, ordered by effective day, with a fenced,
   idempotent write that survives throttling and conflicts.
+- **ProjectedWrites** commits each batch to the log, then projects it into a whole-record read-side view. A caller
+  whose projection failed gets `Committed`, and a sweeper finishes the projection.
+- **ProjectedRows** projects one row per entry. A throttled row leaves the record partly projected, each caller is
+  answered `Projected` or `Committed` with why, and a sweeper writes the missing rows.
 
 ## Next
 

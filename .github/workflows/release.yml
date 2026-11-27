@@ -64,6 +64,10 @@ jobs:
           cache: sbt
       - uses: sbt/setup-sbt@v1
         if: steps.central.outputs.published != 'true'
+      # The conformance suites check runs against the TLA+ models with TLC; without it they fail as skipped.
+      - name: Fetch TLA+ tools
+        if: steps.central.outputs.published != 'true'
+        run: curl -fsSL -o tla2tools.jar https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar
       - name: Test
         if: steps.central.outputs.published != 'true'
         run: sbt "check; testFull"

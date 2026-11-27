@@ -8,6 +8,8 @@
 The application's functions (`call`, `key`, `weigh`, `rank`, `extract`) run outside transactions, because a
 transaction may retry.
 
+![The shell applies one pure protocol step per STM transaction and records its actions in the same transaction](../assets/pure-core.svg)
+
 ## Fibers
 
 ```mermaid
@@ -63,7 +65,7 @@ Because admission closes first, an interrupted call is always an event after clo
 
 Admission must be atomic with the check that the ferry is open. Taking a batch must be atomic with owning it and
 marking its key busy. Completing must be atomic with freeing the key. With all the state in one value, each of these
-is a single transaction, so the races 0.3 guarded with a lock, a semaphore and uninterruptible regions cannot happen.
+is a single transaction, so races that a lock, a semaphore and uninterruptible regions would otherwise have to guard cannot happen.
 
 The cost is that every caller contends on one `TRef`. If a measurement ever shows that this limits throughput,
 several ferries over shares of the keys spread the load without changing any guarantee

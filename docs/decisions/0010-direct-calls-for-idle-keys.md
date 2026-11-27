@@ -33,6 +33,6 @@ concurrency is the classification.
 - Total concurrent calls are bounded by `maxInFlightBatches` plus the number of idle keys called at once, which is the
   same as unbatched traffic. A downstream that cannot take that sets `directIdleKeys = false`.
 - `metrics.inFlightBatches` counts direct calls too.
-- `formal/PerKey.tla` models the claim, the forked call and the release; `PerKeyNoDirectGuard` (claiming a key that is
+- `formal/PerKey.tla` (now `formal/Ferry.tla`, with `FerryNoDirectGuard`, since [0016](0016-one-protocol.md)) models the claim, the forked call and the release; `PerKeyNoDirectGuard` (claiming a key that is
   not idle) and `PerKeyNoAwaitCall` (releasing before the call is over) must fail with two calls in flight for one key.
   `PerKeyBatchOnly` keeps the batch-everything mode checked.
