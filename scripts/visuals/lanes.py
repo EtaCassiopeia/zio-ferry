@@ -25,7 +25,7 @@ def build() -> Scene:
     sc = Scene(
         STORE_X + 88, 470, T,
         "Ferry.perKey · under the hood",
-        "maxInFlightBatches = 1 · all state in one TRef[Lanes] · STM",
+        "maxInFlightBatches = 1 · all state in one TRef[Protocol] · STM",
         "the worker takes the first ready key; a key that still has inputs rejoins the back of the line; idle c skips it",
         "Inside Ferry.perKey: each key has a lane that is ready, busy or idle. One worker takes the first key in the "
         "ready line, carries its batch, and puts the key back at the end of the line if more inputs arrived, so a "
