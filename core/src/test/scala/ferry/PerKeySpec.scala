@@ -82,10 +82,12 @@ object PerKeySpec extends ZIOSpecDefault:
           first <- d("k" -> 1).fork
           _     <- metricsReach(d)(_.inFlightBatches == 1)
           rest  <- submitInOrder(d, "k" -> 2, "k" -> 3, "k" -> 4)
-          held  <- d.metrics // three slots are free, yet none is used for "k"
-          _     <- down.gate.succeed(())
-          _     <- ZIO.foreach(first +: rest)(_.join)
-          sent  <- down.batches.get
+          // A caller can park before it is admitted: wait, for a bounded time, until all three are counted.
+          _    <- Live.live(d.metrics.repeatUntil(_.queued == 3).timeout(5.seconds))
+          held <- d.metrics // three slots are free, yet none is used for "k"
+          _    <- down.gate.succeed(())
+          _    <- ZIO.foreach(first +: rest)(_.join)
+          sent <- down.batches.get
         yield assertTrue(
           held == Ferry.Metrics(queued = 3, inFlightBatches = 1),
           sent == Chunk("k" -> Chunk(1), "k" -> Chunk(2, 3, 4))
