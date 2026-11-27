@@ -334,6 +334,16 @@ Safety ==
   /\ OneInFlightPerKey /\ InOrderPerKey /\ AtMostOnce /\ TurnedAwayNeverSent
   /\ BatchBounded /\ QueueBounded /\ NoneStrandedAfterClose
 
+(* Two rules of the contract that the actions above only imply, stated apart from them so that a change to Cancel or *)
+(* Take that breaks one is caught by model checking, not only by replay. Both are about steps, so they are checked as *)
+(* properties.                                                                                                       *)
+
+(* An input is sent only while its caller still waits: one whose caller gave up, or was interrupted, is never sent. *)
+CancelledNeverSent == [][\A c \in Callers : sent'[c] > sent[c] => answer[c] = "none"]_vars
+
+(* Ready lanes are served first come, first served: a worker takes the lane that has been ready longest. *)
+FirstComeFirstServed == [][\A w \in Workers : wkey[w] = NoKey /\ wkey'[w] # NoKey => wkey'[w] = Head(ready)]_vars
+
 (* Liveness: every caller that was let in is eventually answered. *)
 EveryCallerAnswered == \A c \in Callers : (caller[c] \in {"queued", "direct"}) ~> (answer[c] # "none")
 =============================================================================
