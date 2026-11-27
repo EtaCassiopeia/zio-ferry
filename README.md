@@ -41,5 +41,3 @@ and by TLA+ models that the code is mechanically kept in step with.
 [architecture](https://etacassiopeia.github.io/zio-ferry/architecture/) ·
 [verification](https://etacassiopeia.github.io/zio-ferry/verification/) ·
 [API](https://etacassiopeia.github.io/zio-ferry/api/)
-
-Scala 3.3 LTS and 3.9, ZIO 2.1, JDK 17+. Apache 2.0.
