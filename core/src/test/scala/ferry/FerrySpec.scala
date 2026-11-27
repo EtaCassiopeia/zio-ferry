@@ -143,8 +143,10 @@ object FerrySpec extends ZIOSpecDefault:
               current.update(_ - 1)
             )(_ => gate.await)
           }((n, _) => n)
-          calls   <- ZIO.foreach(1 to 6)(ferry(_).fork)
-          _       <- metricsReach(ferry)(m => m.inFlightBatches == 2 && m.queued == 4)
+          calls <- ZIO.foreach(1 to 6)(ferry(_).fork)
+          _     <- metricsReach(ferry)(m => m.inFlightBatches == 2 && m.queued == 4)
+          // A batch counts as in flight once taken, before its call has started: wait for both calls to run.
+          _       <- current.get.repeatUntil(_ == 2)
           _       <- gate.succeed(())
           results <- ZIO.foreach(calls)(_.join)
           maxSeen <- peak.get
