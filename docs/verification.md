@@ -7,9 +7,29 @@ are tied together so that **the model and the code cannot drift apart without a 
 [0002](decisions/0002-layered-verification.md), [0017](decisions/0017-model-conformance.md) and
 [0018](decisions/0018-deterministic-simulation.md).
 
+## How a model drifts from its code
+
+A model checked once, next to code that keeps changing, drifts from it in three ways, and nothing fails when it does:
+
+![Three kinds of drift: the code splits a step, the model gains a guard, or the model's step was always bigger than the code's](assets/three-kinds-of-drift.svg)
+
+- **The code moves.** A refactoring splits one transaction in two. The tests still pass, because the new interleaving
+  is rare, and the model still passes, because it checks a protocol that no longer exists.
+- **The model moves.** Someone simplifies the model and adds a guard the code never had. TLC is happier, because the
+  model got stronger, but it now proves things about a system nobody built.
+- **Neither moves, but the steps differ in size.** The model takes in one action what the code does in two, with a gap
+  between them that other fibers can run in. Whether that is safe is an argument in somebody's head.
+
+A check in one direction cannot see all three. Checking the code's runs against the model catches the code doing
+something the model forbids, but not the model allowing something the code never does. Driving the code through the
+model's behaviours catches the converse. So Ferry checks both, and makes the steps the same size by construction.
+
+## The layers
+
 | Layer | What it gives | Where |
 |---|---|---|
 | Unit tests on virtual time | exact timing of deadlines and delays | `FerrySpec`, `PerKeySpec`, `FoldWriteSpec`, `ProjectedWriteSpec` |
+| Property tests | `keyed` sends each distinct input once; a configuration is accepted exactly when its constraints hold | `FerryPropertySpec` |
 | Protocol tests | each step of the pure state machine, on its own | `ProtocolSpec` |
 | Model-based tests | batches and dispatch instants agree with an independent executable model | `FerryModelSpec` |
 | Deterministic simulation | random scenarios in which scheduling, time and outcomes are recorded decisions; every run checked against the contract, replayable and shrinkable; runs of up to 6 callers for the model, up to 24 for the contract alone | `FerrySimulation`, `SimulationConformanceSpec` |
@@ -17,7 +37,8 @@ are tied together so that **the model and the code cannot drift apart without a 
 | Model replay (model → code) | every behaviour TLC generates is followed step by step by the code | `ModelReplaySpec` |
 | Vocabulary and coverage | the code's actions are the model's, and all of them are exercised on both sides | `VocabularySpec` |
 | Planted drift | wrong code and wrong models are caught | `DriftSpec` |
-| Writer simulations | fenced writes and projections through crashes, lost answers and throttling; every run is a behaviour of its writer's model, key by key, and each safeguard is rejected by the model with it | `FencedWriterSimulation`, `ProjectedWriterSimulation`, `PartialProjectionSimulation`, and a `…ConformanceSpec` for each |
+| Writer simulations | fenced writes and projections through crashes, lost answers and throttling; every run is a behaviour of its writer's model, key by key, and each safeguard is rejected by the model with it. They run on ZIO's `TestClock`, seeded: a failure is reproduced by its seed, not replayed from decisions | `PerKeyPropertySpec`, `ProjectedWriterSimulationSpec`, `PartialProjectionSimulationSpec`, and a `…ConformanceSpec` for each |
+| The simulator itself | the same decisions give the same run; a run replays from its decisions alone; a program that can never finish is reported as hung | `SimulatorSpec`, `ExploreSpec` (in `testkit`) |
 | Stress tests on the real scheduler | interleavings a single-threaded simulator never runs | `FerryStressSpec`, `PerKeyStressSpec` |
 | TLA+ model checking | every interleaving of the protocol in a small instance, for safety and liveness | [`formal/`](https://github.com/EtaCassiopeia/zio-ferry/tree/main/formal) |
 
@@ -71,7 +92,7 @@ the root of the repository, or in the usual local installs.
 |---|---|
 | the engine serves the *last* ready lane first | trace validation, and replay |
 | the engine ignores `maxBatchWeight` | trace validation, and the contract |
-| the engine leaves a cancelled input in its lane (as 0.3 did) | trace validation, and replay |
+| the engine leaves a cancelled input in its lane | trace validation, and replay |
 | the model takes only full lanes | trace validation of the code's partial batches |
 | the model lets a cancelled caller keep its place | trace validation, and replay |
 | the engine sends partial batches before their deadline | the contract only: TLC accepts every run |
@@ -139,6 +160,12 @@ is needed and that the model can notice its absence.
 | `ProjectedWriter.tla` | the same for a commit followed by a fenced projection and a sweeper | `ProjectedWriterUnfencedProject`, `ProjectedWriterEarlyAnswer`, `ProjectedWriterNoResume` |
 | `ProjectedWriterPartial.tla` | the same, for a view of one row per entry | `ProjectedWriterPartialUnconditionalRows`, `ProjectedWriterPartialEarlyClear`, `ProjectedWriterPartialUnfencedClear`, `ProjectedWriterPartialNoResume` |
 
+Each model checked against runs of the code has a trace module next to it, which takes one model step per recorded
+event: `FerryTrace.tla`, `FencedWriterTrace.tla`, `ProjectedWriterTrace.tla` and `ProjectedWriterPartialTrace.tla`.
+The `act` record changes on every step, so the writer configurations that check safety compare states through a
+`VIEW` that leaves it out, which keeps the state space from growing with it. The per-entry model's liveness is checked
+in a configuration of its own, `ProjectedWriterPartialLiveness`, without the `VIEW`.
+
 CI runs every configuration on every change, and fails if a passing model fails or a weakened variant passes.
 
 ## Exploring at random, on purpose
@@ -169,5 +196,14 @@ formal/check.sh path/to/tla2tools.jar         # TLC, every model and variant
   simulations' fake stores ([0020](decisions/0020-writer-conformance.md),
   [0022](decisions/0022-projection-conformance.md)). A real store is trusted to behave like its fake: to apply a
   conditional write atomically, and to refuse it exactly when the fence says so.
+- **Atomicity is assumed, not checked.** Every check here trusts that each recorded step was one transaction. A step
+  split in two shows only when some run happens to put another step in the gap. The simulator explores many orderings,
+  so such a gap is likely to be hit; likely is not certain.
+- **A record is a claim.** Trace validation compares the recorded actions with the model's, not the states. If a
+  step's record leaves out a decision the step made, such as whether a conditional write was refused, the model may
+  take the other branch and accept the run. So every record says what its step did, not only that it ran.
+- **Checks of runs see only the paths runs take.** A drift that needs, say, two lanes ready at once is invisible in a
+  run that never has two lanes ready together. Model checking covers those states; trace validation and replay only
+  judge the paths that were run.
 - **The simulator is single-threaded.** The stress tests remain the check against real-thread surprises.
 - **Nothing here measures performance.** Benchmarks come before any performance work ([0008](decisions/0008-deferred.md)).

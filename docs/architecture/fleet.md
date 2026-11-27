@@ -39,6 +39,19 @@ Both safeguards are needed, and each is shown to be needed:
   ([0020](../decisions/0020-writer-conformance.md)): a writer without the fence, or without deduplication, is rejected
   by the model with that safeguard, and accepted by the model without it.
 
+## The models take the code's steps
+
+A model of a fleet pattern is easiest to write with big steps: "the store applies the write and the node answers its
+clients" as one action. The code takes two, and a crash can fall between them. Checked against a recorded run in which
+a node crashed after the store applied its write, a model with the big step has no state between the two, and
+rejects a run that really happened.
+
+![A model that delivers and answers in one step rejects a run in which the node crashed between the two](../assets/granularity.svg)
+
+So each writer model has the code's steps, one action per step the code records, and each recorded step says what it
+did: whether a conditional write was applied or refused, not only that it was sent. A record that left that out would
+let the model take the other branch, and accept a writer that skipped its safety check.
+
 ## What a crash costs
 
 Ferry keeps no write-ahead log: that would make the process a second source of truth. A crash loses what was waiting
