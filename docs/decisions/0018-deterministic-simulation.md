@@ -4,8 +4,8 @@ Status: Accepted.
 
 ## Context
 
-The simulations of 0.3 ran on ZIO's `TestClock`. Virtual time made them fast, but which fiber ran next was up to the
-real scheduler. A seed reproduced a run's workload, not its interleaving, so a failure could not be replayed exactly
+Simulations on ZIO's `TestClock` alone are fast, thanks to virtual time, but which fiber runs next is up to the
+real scheduler. A seed reproduces a run's workload, not its interleaving, so a failure cannot be replayed exactly
 or shrunk.
 
 ## Decision
