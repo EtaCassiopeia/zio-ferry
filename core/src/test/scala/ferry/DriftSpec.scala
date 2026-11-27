@@ -91,8 +91,9 @@ object DriftSpec extends ZIOSpecDefault:
   /** How many runs broke the contract checks of the simulation. */
   private def broken(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) = verdicts.count(_._1)
 
-  private def toolErrors(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) =
-    verdicts.flatMap(_._2).collect { case e: Tlc.Verdict.ToolError => e }
+  /** Runs TLC did not judge, because it is missing or failed: "not checked" must never read as "accepted". */
+  private def unchecked(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) =
+    verdicts.flatMap(_._2).collect { case v @ (_: Tlc.Verdict.ToolError | _: Tlc.Verdict.Skipped) => v }
 
   /**
    * How many of a thousand of the model's behaviours diverge when replayed through `rules`, from a model altered by
@@ -118,33 +119,33 @@ object DriftSpec extends ZIOSpecDefault:
         for
           traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), ServeLastReady, Alter.none)
           replay <- divergences("FerryBatchOnly", ServeLastReady)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0), broken(traces) == 0)
+        yield assertTrue(unchecked(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0), broken(traces) == 0)
       },
       test("ignoring the weight limit") {
         for traces <- traceVerdicts(Seq(Family.Weighted), IgnoreWeightLimit, Alter.none)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, broken(traces) > 0)
+        yield assertTrue(unchecked(traces).isEmpty, rejected(traces) > 0, broken(traces) > 0)
       },
       test("leaving a cancelled input in its lane") {
         for
           traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), KeepCancelledInLane, Alter.none)
           replay <- divergences("FerryBatchOnly", KeepCancelledInLane)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0), broken(traces) == 0)
+        yield assertTrue(unchecked(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0), broken(traces) == 0)
       }
     ),
     test("sending partial batches before their deadline is the contract's to catch: the model has no clock") {
       for traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), IgnoreDeadline, Alter.none)
-      yield assertTrue(toolErrors(traces).isEmpty, broken(traces) > 0, rejected(traces) == 0)
+      yield assertTrue(unchecked(traces).isEmpty, broken(traces) > 0, rejected(traces) == 0)
     },
     suite("in the model")(
       test("a model that takes only full lanes rejects the code's partial batches") {
         for traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), Engine.Rules.standard, TakeOnlyFull)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0)
+        yield assertTrue(unchecked(traces).isEmpty, rejected(traces) > 0)
       },
       test("a model in which a cancelled caller keeps its place diverges from the code") {
         for
           traces <- traceVerdicts(Seq(Family.PerKeyBatched), Engine.Rules.standard, CancelKeepsPlace)
           replay <- divergences("FerryBatchOnly", Engine.Rules.standard, CancelKeepsPlace)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0))
+        yield assertTrue(unchecked(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0))
       }
     )
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.minutes)
