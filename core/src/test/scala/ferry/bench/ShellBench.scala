@@ -21,7 +21,8 @@ object ShellBench extends ZIOAppDefault:
   private val total   = 200_000
   private val rounds  = 3
   private val callers = List(1, 16, 256, 1024)
-  private val shells  = List("stm", "loop")
+  private val shells  =
+    Option(java.lang.System.getProperty("bench.shells")).fold(List("stm", "loop"))(_.split(",").toList)
 
   private def make(delay: Duration, call: NonEmptyChunk[Int] => UIO[Int]) =
     ZIO
@@ -39,12 +40,22 @@ object ShellBench extends ZIOAppDefault:
         Ferry.perKey(cfg, (i: Int) => i % keys)((_, batch: NonEmptyChunk[Int]) => ZIO.succeed(batch.size))((i, _) => i)
       )
 
+  private def sharded(shards: Int, keys: Int, latency: Option[Duration]) =
+    Sharded.perKey(shards, maxBatchSize = 64, maxInFlightBatches = 64, maxQueueing = total, (i: Int) => i % keys)(
+      (_, batch: NonEmptyChunk[Int]) => ZIO.foreachDiscard(latency)(ZIO.sleep(_)).as(batch.size)
+    )((i, _) => i)
+
   private val workloads = List(
     Workload("make, no-op call", make(Duration.Zero, b => ZIO.succeed(b.size))),
     Workload("perKey, 1000 keys", perKey(1000)),
     Workload("perKey, 4 hot keys", perKey(4)),
     Workload("make, 1 ms call", make(Duration.Zero, b => ZIO.sleep(1.milli).as(b.size)), 5_000),
-    Workload("make, 1 ms call, 200 µs batch delay", make(200.micros, b => ZIO.sleep(1.milli).as(b.size)), 5_000)
+    Workload("make, 1 ms call, 200 µs batch delay", make(200.micros, b => ZIO.sleep(1.milli).as(b.size)), 5_000),
+    Workload("sharded perKey, 1000 keys, 1 shard", sharded(1, 1000, None)),
+    Workload("sharded perKey, 1000 keys, 4 shards", sharded(4, 1000, None)),
+    Workload("sharded perKey, 1000 keys, 8 shards", sharded(8, 1000, None)),
+    Workload("sharded perKey, 1000 keys, 1 ms call, 1 shard", sharded(1, 1000, Some(1.milli)), 20_000),
+    Workload("sharded perKey, 1000 keys, 1 ms call, 8 shards", sharded(8, 1000, Some(1.milli)), 20_000)
   )
 
   final case class Result(callsPerSecond: Double, p50: Long, p99: Long)
