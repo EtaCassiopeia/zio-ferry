@@ -9,18 +9,12 @@
 [![Maven Central](https://img.shields.io/maven-central/v/io.github.etacassiopeia/zio-ferry_3)](https://central.sonatype.com/artifact/io.github.etacassiopeia/zio-ferry_3)
 [![Docs](https://img.shields.io/badge/docs-etacassiopeia.github.io%2Fzio-ferry-blue)](https://etacassiopeia.github.io/zio-ferry/)
 
-A ZIO 2 micro-batching bulkhead. It coalesces concurrent calls into batched calls to an external system, caps how
-many batches run at once and how many inputs may wait, and gives each caller its own share of the result.
+Micro-batching for ZIO 2. Concurrent calls are combined into batched calls to an external system, with a cap on how
+many batches run at once and how many inputs may wait. Each caller gets its own share of the result.
 
 <p align="center">
   <img src="docs/assets/ferry.svg" width="100%" alt="Ferry.perKey: an idle key's input is sent at once; a busy key's inputs wait in its lane while its call is in flight and leave together in its next call, in order, one call per key at a time.">
 </p>
-
-**[Documentation](https://etacassiopeia.github.io/zio-ferry/)**: [getting started](https://etacassiopeia.github.io/zio-ferry/getting-started/),
-[guide](https://etacassiopeia.github.io/zio-ferry/guide/batching/),
-[architecture](https://etacassiopeia.github.io/zio-ferry/architecture/),
-[verification](https://etacassiopeia.github.io/zio-ferry/verification/),
-[API](https://etacassiopeia.github.io/zio-ferry/api/).
 
 ```scala
 libraryDependencies += "io.github.etacassiopeia" %% "zio-ferry" % "0.3.0"
@@ -34,24 +28,18 @@ for
 yield price
 ```
 
-For writes that must stay in order per entity, `Ferry.perKey` batches each key separately, with at most one call in
-flight per key. Idle keys are not batched at all; busy keys get batches that grow with load, sent in an
-[order](https://etacassiopeia.github.io/zio-ferry/guide/ordering/) of your choice. `FoldWrite` packages the fenced,
-idempotent "read once, apply, conditional write" call to pair it with, and `ProjectedWrite` the same followed by a
-fenced projection into a read-side view, per record or per entry.
+- **`Ferry.make` / `Ferry.keyed`**: batch calls, by size and by how long the oldest input may wait.
+- **`Ferry.perKey`**: ordered writes per entity, one call in flight per key, bounded by count and weight; idle keys
+  are sent at once.
+- **`FoldWrite`, `ProjectedWrite`**: the fenced, idempotent write to pair with it, safe on a fleet.
 
-Every caller gets an answer, overload fails fast, and per-key order holds. This is checked by deterministic
-simulations, stress tests and TLA+ models with weakened variants that must fail. The code and its model are kept in
-step mechanically: every step of the code is an action of the model, recorded runs are checked against the model by
-TLC, and the model's behaviours are replayed through the code ([verification](https://etacassiopeia.github.io/zio-ferry/verification/)).
+Every caller gets an answer, overload fails fast, and per-key order holds. This is checked by deterministic simulation
+and by TLA+ models that the code is mechanically kept in step with.
 
-```sh
-sbt testFull                             # needs tla2tools.jar at the root, see Development
-formal/check.sh path/to/tla2tools.jar
-```
+**[Documentation](https://etacassiopeia.github.io/zio-ferry/)**: [getting started](https://etacassiopeia.github.io/zio-ferry/getting-started/) ·
+[guide](https://etacassiopeia.github.io/zio-ferry/guide/batching/) ·
+[architecture](https://etacassiopeia.github.io/zio-ferry/architecture/) ·
+[verification](https://etacassiopeia.github.io/zio-ferry/verification/) ·
+[API](https://etacassiopeia.github.io/zio-ferry/api/)
 
-Like a ferry, each batch carries whoever gathered while the previous one was away, and leaves when it is back.
-
-Formerly BulkDike. A Scala 3 rewrite of the queueing core of
-[api-aggregation-service](https://github.com/EtaCassiopeia/api-aggregation-service), inspired by
-[rezilience](https://github.com/svroonland/rezilience). Scala 3.3 LTS / 3.9, ZIO 2.1, sbt 2, JDK 17+. Apache 2.0.
+Scala 3.3 LTS and 3.9, ZIO 2.1, JDK 17+. Apache 2.0.
