@@ -86,13 +86,14 @@ formal/check.sh path/to/tla2tools.jar
 `formal/`:
 
 ```sh
-java -cp ../tla2tools.jar tlc2.TLC -deadlock -config FerryNoBusyGuard.cfg Ferry.tla
+java -cp ../tla2tools.jar tlc2.TLC -deadlock -config FencedWriterUnfenced.cfg FencedWriter.tla
 ```
 
-A change to `Protocol.scala` needs the matching change to `formal/Ferry.tla`, or the conformance suites fail:
-trace validation rejects the code's runs, or replay of the model's behaviours diverges. A new action needs a case in
-`Protocol.Action`, the same name in the model's `Vocabulary`, and the same record in `act`. A new mechanism needs a
-variant without it that must fail.
+A change to `Protocol.scala` is checked as it stands: the explorer (`check/ProtocolSpace`) visits every state of
+small instances, and every simulated run of the engine is replayed through the protocol, with the properties checked
+after each step. A new step needs a case in `Protocol.Action` and a step in `ProtocolSpace.Steps`; a new promise needs a
+property; a new mechanism needs a weakened variant without it that must fail. A change to a writer pattern needs the
+matching change to its TLA+ model in `formal/`.
 
 ## Documentation
 

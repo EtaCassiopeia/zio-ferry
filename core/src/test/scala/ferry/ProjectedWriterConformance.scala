@@ -89,10 +89,10 @@ object ProjectedWriterConformance:
       commands,
       nodes,
       ListMap(
-        "MaxCrashes"    -> Conformance.Unbounded.toString,
-        "MaxLost"       -> Conformance.Unbounded.toString,
-        "MaxThrottled"  -> Conformance.Unbounded.toString,
-        "MaxGiveUps"    -> Conformance.Unbounded.toString,
+        "MaxCrashes"    -> WriterTraces.Unbounded.toString,
+        "MaxLost"       -> WriterTraces.Unbounded.toString,
+        "MaxThrottled"  -> WriterTraces.Unbounded.toString,
+        "MaxGiveUps"    -> WriterTraces.Unbounded.toString,
         "FencedProject" -> WriterTraces.bool(model.fencedProject),
         "Resume"        -> "TRUE",
         "EarlyAnswer"   -> WriterTraces.bool(model.earlyAnswer)

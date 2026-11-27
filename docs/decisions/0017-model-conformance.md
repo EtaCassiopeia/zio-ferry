@@ -1,6 +1,8 @@
 # 0017. Check the code against the model in both directions
 
-Status: Accepted. Takes trace validation out of [0008](0008-deferred.md).
+Status: Accepted. Takes trace validation out of [0008](0008-deferred.md). The protocol's half is superseded by
+[0023](0023-the-code-is-the-model.md): the protocol is checked directly, and `Ferry.tla` is retired. The writer models
+keep this decision.
 
 ## Context
 

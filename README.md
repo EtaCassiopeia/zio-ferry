@@ -33,8 +33,8 @@ yield price
   are sent at once.
 - **`FoldWrite`, `ProjectedWrite`**: the fenced, idempotent write to pair with it, safe on a fleet.
 
-Every caller gets an answer, overload fails fast, and per-key order holds. This is checked by deterministic simulation
-and by TLA+ models that the code is mechanically kept in step with.
+Every caller gets an answer, overload fails fast, and per-key order holds. This is checked by deterministic simulation,
+by exploring the protocol itself, and by TLA+ models of the patterns for running on a fleet.
 
 **[Documentation](https://etacassiopeia.github.io/zio-ferry/)**: [getting started](https://etacassiopeia.github.io/zio-ferry/getting-started/) ·
 [guide](https://etacassiopeia.github.io/zio-ferry/guide/batching/) ·

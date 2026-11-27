@@ -105,6 +105,7 @@ nav:
           - 0020 Writer conformance: decisions/0020-writer-conformance.md
           - 0021 Explore at random: decisions/0021-explore-at-random.md
           - 0022 Projection conformance: decisions/0022-projection-conformance.md
+          - 0023 The code is the model: decisions/0023-the-code-is-the-model.md
       - "Proposal: ordering, lateness, grouping": design/ordering.md
   - API reference: https://etacassiopeia.github.io/zio-ferry/api/
   - Development: development.md

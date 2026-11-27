@@ -7,10 +7,11 @@ import zio.{Chunk, NonEmptyChunk}
 /**
  * The protocol behind every Ferry, as a pure state machine: all of its shared state, and one method per step.
  *
- * Each method is one action of the TLA+ model in `formal/Ferry.tla`, under the same name, and returns the next state
- * together with the [[Protocol.Action]]s it took: the same records the model keeps in its `act` variable. The ZIO shell
- * ([[Engine]]) applies each step in one STM transaction, so the code's atomic steps are the model's actions by
- * construction, and a recorded run can be checked against the model step by step.
+ * Each method is one named step, and returns the next state together with the [[Protocol.Action]]s it took. The ZIO
+ * shell ([[Engine]]) applies each step in one STM transaction and records its actions inside it, so a recorded run is
+ * the sequence of steps the protocol took, in the order they took effect. Because the protocol is pure and its only
+ * choices are its environment's, it is checked directly: the tests explore every state of small instances, and replay
+ * recorded runs of the engine through it, with its properties checked after every step.
  *
  * Inputs wait in a lane per key, in ascending rank, ties in arrival order. A lane is in exactly one of three states:
  *   - `Waiting(deadline)`: holds a partial batch whose oldest input is not yet due;
@@ -219,8 +220,9 @@ final private[ferry] case class Protocol[K, X](
 
   /**
    * The deadline of `key`'s waiting lane has passed: the lane joins the ready line. `None` if the lane is not waiting.
-   * [[take]] applies it to every lane due by its `now`; it is a step of its own because, in the model, the passing of
-   * time is an event of the environment, which a replay of the model's behaviours applies when the model does.
+   * [[take]] applies it to every lane due by its `now`; it is a step of its own because the passing of time is an event
+   * of the environment, which exploring the protocol's states applies at any moment, and a replay applies when the
+   * recorded run did.
    */
   def due(key: K): Option[Step[K, X, Unit]] =
     lanes.get(key).collect { case lane @ Lane(_, _, Schedule.Waiting(deadline)) =>
@@ -297,8 +299,7 @@ object Protocol:
     case Succeeded, Failed, Interrupted
 
   /**
-   * The vocabulary shared with the model: each case is a TLA+ action of `formal/Ferry.tla` with the same name and the
-   * same parameters as the model's `act` record.
+   * The protocol's steps, as recorded: one case per kind of step, with its parameters.
    */
   enum Action[+K]:
     case Enqueue(caller: Long, key: K, weight: Long, rank: Long)

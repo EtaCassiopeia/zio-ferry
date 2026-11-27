@@ -1,12 +1,9 @@
 #!/usr/bin/env bash
-# Model-checks the Ferry protocols with TLC. Each spec has one configuration that must pass, and weakened
-# variants that must FAIL: each variant removes one mechanism, and its failure proves that mechanism is needed.
+# Model-checks the deployment patterns for running Ferry on a fleet with TLC. (The protocol itself has no model: the
+# code is checked directly, by exploring its state space; see ferry.check.ProtocolSpace.) Each spec has one
+# configuration that must pass, and weakened variants that must FAIL: each variant removes one mechanism, and its
+# failure proves that mechanism is needed.
 #
-#   Ferry.tla      the protocol of Ferry.make and Ferry.perKey, action for action as ferry.Protocol implements it
-#                  (safety and liveness): Ferry (perKey, idle keys called directly), FerryBatchOnly, FerryMake
-#     FerryUnsorted                          -> inputs waiting together are sent out of rank order
-#     FerryNoBusyGuard, FerryNoDirectGuard   -> a key has two calls in flight
-#     FerryNonAtomicAdmission, FerryNoDrain  -> a caller is stranded after close
 #   FencedWriter.tla  the single-writer-per-key deployment pattern, against a store with conditional appends
 #     FencedWriterUnfenced, FencedWriterNoDedup                         -> a command is applied twice
 #   ProjectedWriter.tla  the same pattern for a store that commits, then projects (ProjectedWrite); safety and liveness
@@ -50,11 +47,6 @@ fails() { # spec config [expected TLC message]
   echo "$out" | grep -qE "$expected" || { echo "$out" | tail -n 20; exit 1; }
   echo "violated, as expected"
 }
-
-for config in Ferry FerryBatchOnly FerryMake; do passes Ferry "$config"; done
-fails Ferry FerryUnsorted "Invariant InOrderPerKey is violated"
-for variant in FerryNoBusyGuard FerryNoDirectGuard; do fails Ferry "$variant" "Invariant OneInFlightPerKey is violated"; done
-for variant in FerryNonAtomicAdmission FerryNoDrain; do fails Ferry "$variant" "Invariant NoneStrandedAfterClose is violated"; done
 
 passes FencedWriter FencedWriter
 for variant in FencedWriterUnfenced FencedWriterNoDedup; do fails FencedWriter "$variant"; done

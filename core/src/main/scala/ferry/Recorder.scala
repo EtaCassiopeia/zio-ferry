@@ -8,8 +8,8 @@ import zio.stm.*
  * transaction that makes the step, so a recorded trace is in the order the steps took effect: no sequence numbers, no
  * clock, nothing to reorder.
  *
- * In production the recorder is [[Recorder.off]] and costs nothing. Tests record into a `TRef` and check the trace
- * against the TLA+ model.
+ * In production the recorder is [[Recorder.off]] and costs nothing. Tests record into a `TRef` and check the trace by
+ * replaying it through the protocol.
  */
 private[ferry] trait Recorder[-K]:
   def record(actions: Chunk[Protocol.Action[K]]): USTM[Unit]
