@@ -233,20 +233,26 @@ at admission (`submittedAt + max(0, holdUntil − now)`), so `Lanes` keeps a sin
 
 ### A.6 What the kernel guarantees regardless of the plugged-in strategy
 
-Kernel invariants, model-checked in `formal/PerKey.tla` for any policy (the model's `Take` chooses *any* eligible
-subset of a lane up to `MaxBatch`; a policy only narrows that choice):
+Kernel guarantees, model-checked in `formal/Ferry.tla` (configs `Ferry`, `FerryBatchOnly` and `FerryMake`) for the
+built orders, `Order.arrival` and `Order.by`. The model's `Take` is the code's: the first ready lane, its longest
+fitting prefix.
 
 - **one call in flight per key**, batched or direct (`OneInFlightPerKey`);
 - **each input is sent at most once** (`AtMostOnce`) and **turned-away inputs are never sent** (`TurnedAwayNeverSent`);
-- **an input is owned by one place at a time**: a lane or one worker (`SingleOwner`);
 - **a batch holds at most `maxBatchSize` inputs and, beyond one, at most `maxBatchWeight`** (`BatchBounded`);
-- **the waiting room holds at most `maxQueueing` inputs and `maxQueuedWeight`**; beyond that, `Rejected` at once;
+- **the waiting room holds at most `maxQueueing` inputs and `maxQueuedWeight`** (`QueueBounded`); beyond that,
+  `Rejected` at once;
 - **no caller is stranded**: every admitted caller gets a result, a failure or an interruption, including on close
-  (`NoneStrandedAfterClose`, `EveryCallerAnswered`, `EveryDirectCallerDone`);
-- **a caller interrupted before dispatch is left out of its batch**;
-- **ready lanes are served first come first served, and a lane with more joins the back**: no key starves another;
-- **batches are per key and in rank order, ties by arrival**, and **never straddle a partition token**;
-- **nothing is dispatched before its `holdUntil`**.
+  (`NoneStrandedAfterClose`, and the liveness property `EveryCallerAnswered`);
+- **an input whose caller gave up before dispatch is never sent** (`CancelledNeverSent`);
+- **ready lanes are served first come first served** (`FirstComeFirstServed`), and a lane still full after a take
+  joins the back of the ready line: no key starves another;
+- **each key's inputs are sent in rank order, ties by arrival** (`InOrderPerKey`); an input admitted after another was
+  already sent may follow it whatever its rank.
+
+The model has no clock, so deadlines are checked by the simulation's contract instead: no partial batch leaves before
+its deadline. Two more guarantees belong to the proposals and are not built: **batches never straddle a partition
+token**, and **nothing is dispatched before its `holdUntil`**.
 
 The plug-in's responsibilities, stated as laws and shipped as a reusable property suite (`ferry.laws.OrderLaws`, in
 the test kit) so a custom `Order` can be checked without reading the kernel:
