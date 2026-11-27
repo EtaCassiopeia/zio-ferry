@@ -27,12 +27,12 @@ Later calls are still served after a failed batch. One failure never poisons the
 
 A ferry lives in the `Scope` it was created in. When the scope closes:
 
-1. the workers are interrupted, and every caller whose batch they held is interrupted;
-2. admission stops, and every input still waiting is released by interrupting its caller;
-3. calls made afterwards are interrupted.
+1. admission closes and every lane is emptied in one atomic step, and the callers whose inputs were waiting are
+   interrupted, so no input can slip into a waiting room that has already been drained;
+2. the workers are interrupted, and a worker in the middle of a call completes it with the outcome `Interrupted`;
+3. direct calls are interrupted, and complete the same way.
 
-Admission and close are one atomic step, so no input can slip into a waiting room that has already been drained.
-Direct calls run in the ferry's scope too, and are interrupted with it.
+Calls made afterwards are interrupted.
 
 ## Guidance for clients
 
