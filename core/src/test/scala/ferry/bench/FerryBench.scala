@@ -5,24 +5,20 @@ import zio.*
 import ferry.{Ferry, FerryConfig, PerKeyConfig}
 
 /**
- * Compares the two shells under contention: the STM shell (one transaction per step on one `TRef`) and the single-owner
- * shell (one fiber processes commands from a queue). Same protocol, same workloads, same JVM.
+ * Throughput and latency of a ferry under contention: 1 to 1024 concurrent callers, each making its share of the calls
+ * back to back. The batch call does no work (or sleeps 1 ms), so the ferry's own cost is what is measured. The sharded
+ * workloads split a per-key ferry into independent ferries by key hash ([[Sharded]]). Reports the median of the
+ * measured rounds: calls per second, and the 50th and 99th percentile of one call's latency.
  *
- * Each workload is run with 1 to 1024 concurrent callers, each making its share of the calls back to back. The batch
- * call does no work (or sleeps, in the last workload), so the shell's own cost is what is measured. Reports the median
- * of the measured rounds: calls per second, and the 50th and 99th percentile of one call's latency.
- *
- * Run: `core/Test/runMain ferry.bench.ShellBench` (forked, with enough heap).
+ * Run: `core/Test/runMain ferry.bench.FerryBench`, forked with enough heap; `-Dbench.only=<text>` picks workloads.
  */
-object ShellBench extends ZIOAppDefault:
+object FerryBench extends ZIOAppDefault:
 
   final case class Workload(name: String, build: URIO[Scope, Ferry[Int, Nothing, Int]], calls: Int = 200_000)
 
   private val total   = 200_000
   private val rounds  = 3
   private val callers = List(1, 16, 256, 1024)
-  private val shells  =
-    Option(java.lang.System.getProperty("bench.shells")).fold(List("stm", "loop"))(_.split(",").toList)
 
   private def make(delay: Duration, call: NonEmptyChunk[Int] => UIO[Int]) =
     ZIO
@@ -84,9 +80,8 @@ object ShellBench extends ZIOAppDefault:
       }
     }
 
-  private def measure(shell: String, w: Workload, n: Int): UIO[Result] =
-    ZIO.succeed(java.lang.System.setProperty("ferry.shell", shell)) *>
-      once(w, n, w.calls / 10) *> // warm-up
+  private def measure(w: Workload, n: Int): UIO[Result] =
+    once(w, n, w.calls / 10) *> // warm-up
       ZIO.foreach(1 to rounds)(_ => once(w, n, w.calls)).map(rs => rs.sortBy(_.callsPerSecond).apply(rs.size / 2))
 
   private def us(nanos: Long) = f"${nanos / 1000.0}%.0f µs"
@@ -96,12 +91,10 @@ object ShellBench extends ZIOAppDefault:
       _ <- Console.printLine(s"calls per run: up to $total, median of $rounds rounds").orDie
       only = Option(java.lang.System.getProperty("bench.only"))
       _ <- ZIO.foreachDiscard(workloads.filter(w => only.forall(w.name.contains))) { w =>
-        Console.printLine(s"\n## ${w.name}\n| callers | shell | calls/s | p50 | p99 |\n|---|---|---|---|---|").orDie *>
+        Console.printLine(s"\n## ${w.name}\n| callers | calls/s | p50 | p99 |\n|---|---|---|---|").orDie *>
           ZIO.foreachDiscard(callers) { n =>
-            ZIO.foreachDiscard(shells) { shell =>
-              measure(shell, w, n).flatMap { r =>
-                Console.printLine(f"| $n | $shell | ${r.callsPerSecond}%.0f | ${us(r.p50)} | ${us(r.p99)} |").orDie
-              }
+            measure(w, n).flatMap { r =>
+              Console.printLine(f"| $n | ${r.callsPerSecond}%.0f | ${us(r.p50)} | ${us(r.p99)} |").orDie
             }
           }
       }
