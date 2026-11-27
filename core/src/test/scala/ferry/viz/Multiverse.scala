@@ -2,12 +2,12 @@ package ferry.viz
 
 import zio.Chunk
 
-import ferry.{Conformance, Engine, FerrySimulation}
+import ferry.{Engine, FerrySimulation}
 import ferry.FerrySimulation.{Event, Result, Scenario}
 import ferry.Protocol
 import ferry.Protocol.Action
 import ferry.testkit.sim.{Decisions, Shrink}
-import ferry.testkit.tla.Tlc
+import ferry.check.ProtocolSpace
 
 /**
  * The branches of one scenario: a base run, and runs forked from it by changing one decision and letting the rest play
@@ -29,7 +29,7 @@ object Multiverse:
     forced: Int,         // how many leading decisions were imposed, not chosen freely
     result: Result,
     violations: Chunk[String],
-    verdict: Tlc.Verdict
+    verdict: Option[ProtocolSpace.Replay] // None: the run did not finish, or was not checked
   ):
     def decisions            = result.run.decisions
     def events: Chunk[Event] = result.observation.fold(Chunk.empty)(_.timeline)
@@ -50,10 +50,8 @@ object Multiverse:
     var next     = 0
 
     def add(parent: Option[Int], label: String, forkAt: Option[Int], forced: Int, result: Result): Branch =
-      val trace   = result.observation.map(o => o.recorded(scenario))
       val verdict =
-        if !validate then Tlc.Verdict.Skipped("not validated")
-        else trace.fold(Tlc.Verdict.Rejected("the run did not finish"))(t => Conformance.validate(s"branch_$next", t))
+        if !validate then None else result.observation.map(o => ProtocolSpace.replay(scenario.limits, o.trace, rules))
       val b = Branch(next, parent, label, forkAt, forced, result, FerrySimulation.violations(result), verdict)
       next += 1
       branches += b

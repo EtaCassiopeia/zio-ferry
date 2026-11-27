@@ -5,10 +5,12 @@ import zio.test.*
 
 import ferry.FerrySimulation.{Family, Result}
 import ferry.testkit.sim.{Decisions, Shrink}
-import ferry.testkit.tla.Tlc
+import ferry.check.ProtocolSpace
 
 /**
- * Every simulated run of Ferry keeps its contract, and is a behaviour of the TLA+ model.
+ * Every simulated run of Ferry keeps its contract, and replays step by step through the pure protocol with every
+ * property holding: the concurrent engine took only steps the protocol takes, and the protocol kept its promises on the
+ * paths the engine really took.
  *
  * Runs are deterministic: a seed fixes the scenario and the simulator's decisions, so a failure is reported with its
  * seed and a shrunk decision script that reproduces it exactly. `FERRY_SAMPLES` sets the number of seeds per family.
@@ -51,44 +53,23 @@ object SimulationConformanceSpec extends ZIOSpecDefault:
         .orDie
         .map(same => assertTrue(same.forall(identity)))
     },
-    suite("keep the contract under heavier load than the model is checked with")(
+    suite("keep the contract, and replay through the protocol with every property holding")(
       Family.values.toList.map { family =>
         test(family.toString) {
           ZIO
             .attemptBlocking((1L to samples.toLong * 5).flatMap { seed =>
               val r        = simulate(family, seed, maxCallers = 24)
               val problems = FerrySimulation.violations(r)
-              Option.when(problems.nonEmpty)(explain(r, seed, problems))
+              val replayed = r.observation.map(o => ProtocolSpace.replay(r.scenario.limits, o.trace))
+              Option
+                .when(problems.nonEmpty)(explain(r, seed, problems))
+                .orElse(
+                  replayed.filterNot(_.conforms).map(v => s"seed $seed: $v")
+                )
             })
             .orDie
             .map(broken => assertTrue(broken.isEmpty))
         }
       }*
-    ),
-    suite("keep the contract and are behaviours of the model")(
-      Family.values.toList.map { family =>
-        test(family.toString) {
-          for
-            results <- ZIO.attemptBlocking((1L to samples.toLong).map(seed => seed -> simulate(family, seed))).orDie
-            broken = results.flatMap { (seed, r) =>
-              val problems = FerrySimulation.violations(r)
-              Option.when(problems.nonEmpty)(explain(r, seed, problems))
-            }
-            verdicts <- ZIO
-              .foreachPar(results.filter((_, r) => r.observation.isDefined)) { (seed, r) =>
-                ZIO
-                  .attemptBlocking(
-                    Conformance.validate(s"trace_${family}_$seed", r.observation.get.recorded(r.scenario))
-                  )
-                  .orDie
-                  .map(seed -> _)
-              }
-              .withParallelism(4)
-            rejected = verdicts.collect {
-              case (seed, v) if !v.accepted => s"seed $seed: $v"
-            }
-          yield assertTrue(broken.isEmpty, rejected.isEmpty)
-        }
-      }*
-    ) @@ TestAspect.sequential
+    )
   ) @@ TestAspect.withLiveClock @@ TestAspect.timeout(15.minutes)

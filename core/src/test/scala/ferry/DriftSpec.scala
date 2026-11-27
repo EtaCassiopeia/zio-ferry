@@ -4,21 +4,23 @@ import zio.*
 import zio.test.*
 
 import ferry.FerrySimulation.Family
+import ferry.check.ProtocolSpace
+import ferry.check.ProtocolSpace.Config
+import ferry.testkit.check.StateSpace
 import ferry.testkit.sim.Decisions
-import ferry.testkit.tla.{Alter, Tlc}
 
 /**
- * Planted drift must be caught, in both directions. Each fixture makes the code and the model disagree in one small,
- * plausible way, the kind of change a refactoring makes by accident, and requires the conformance checks to notice:
+ * Planted drift must be caught. Each fixture runs the engine on deliberately wrong [[Engine.Rules]], the kind of change
+ * a refactoring makes by accident, and the table records which check notices:
  *
- *   - '''code drift''': the engine runs on deliberately wrong [[Engine.Rules]]; simulated runs must be rejected by TLC
- *     (code → model), and the model's behaviours must diverge when replayed through the wrong rules (model → code);
- *   - '''model drift''': a copy of `Ferry.tla` is altered; the code's runs must be rejected against it, or its
- *     behaviours must diverge when replayed through the code.
+ *   - '''the protocol's properties''': exploring every state of a small instance with the wrong rules
+ *     ([[ProtocolSpace.check]]), and replaying the engine's simulated runs through those rules with every property
+ *     checked after each step ([[ProtocolSpace.replay]]);
+ *   - '''the contract''': the simulation's own checks of what callers see: answers, times and call counts.
  *
- * The contract checks of the simulation are run too. Of the code drifts the model catches, only the weight limit also
- * breaks a documented promise; the other two break none, which is exactly why a model the code is checked against is
- * worth having. The converse holds as well: the model has no clock, so a drift in timing is the contract's alone.
+ * The two divide the work. The properties see the order of protocol steps but no clock, so a drift in timing is the
+ * contract's alone; the contract sees what callers get but not the order of steps, so two of the three drifts the
+ * properties catch break no promise a caller could check.
  */
 object DriftSpec extends ZIOSpecDefault:
 
@@ -37,9 +39,7 @@ object DriftSpec extends ZIOSpecDefault:
       val unlimited = p.copy(limits = p.limits.copy(maxBatchWeight = Long.MaxValue))
       unlimited.take(worker, now).map(s => s.copy(next = s.next.copy(limits = p.limits)))
 
-  /**
-   * Treats every deadline as passed: partial batches leave at once. The model has no clock, so only the contract sees.
-   */
+  /** Treats every deadline as passed: partial batches leave at once. The protocol has no clock of its own to see it. */
   object IgnoreDeadline extends Engine.Rules:
     override def take[K, X](p: Protocol[K, X], worker: Int, now: Long) = p.take(worker, Long.MaxValue)
 
@@ -48,103 +48,58 @@ object DriftSpec extends ZIOSpecDefault:
     override def cancel[K, X](p: Protocol[K, X], caller: Long) =
       p.cancel(caller).map(s => s.copy(next = p.copy(pending = p.pending - caller)))
 
-  /** A model in which a worker takes only full lanes: a partial batch whose deadline passed would wait forever. */
-  val TakeOnlyFull: Alter =
-    Alter.none.replace(
-      "Ferry.tla",
-      "  /\\ ready # <<>>\n  /\\ LET k    == Head(ready)",
-      "  /\\ ready # <<>>\n  /\\ Full(lane[Head(ready)])\n  /\\ LET k    == Head(ready)"
-    )
+  private type Run = (Boolean, Option[ProtocolSpace.Replay])
 
-  /** A model in which a caller that gives up keeps its place in the lane. */
-  val CancelKeepsPlace: Alter =
-    Alter.none.replace(
-      "Ferry.tla",
-      """  /\ IF \E k \in Keys : c \in Range(lane[k])
-     THEN LET k == CHOOSE x \in Keys : c \in Range(lane[x])
-              s == Remove(lane[k], c)
-          IN  /\ lane' = [lane EXCEPT ![k] = s]
-              /\ sched' = [sched EXCEPT ![k] = Place(k, s, busy)[1]]
-              /\ ready' = Place(k, s, busy)[2]
-     ELSE UNCHANGED <<lane, sched, ready>>""",
-      "  /\\ UNCHANGED <<lane, sched, ready>>"
-    )
-
-  /** The verdicts of trace validation of the simulated runs of `families`, under `rules` and against `alter`. */
-  private def traceVerdicts(families: Seq[Family], rules: Engine.Rules, alter: Alter) =
+  /**
+   * The simulated runs of `families` under `rules`: whether each broke the contract, and its replay through `rules`.
+   */
+  private def runs(families: Seq[Family], rules: Engine.Rules): UIO[Seq[Run]] =
     ZIO
       .foreachPar(for f <- families; s <- seeds yield (f, s)) { (family, seed) =>
         ZIO.attemptBlocking {
           val result = FerrySimulation.run(FerrySimulation.scenario(family, seed), Decisions.seeded(seed), rules)
           val broken = FerrySimulation.violations(result).nonEmpty
-          val trace  = result.observation.map(o =>
-            Conformance.validate(s"drift_${family}_$seed", o.recorded(result.scenario), alter)
-          )
-          (broken, trace)
+          (broken, result.observation.map(o => ProtocolSpace.replay(result.scenario.limits, o.trace, rules)))
         }.orDie
       }
       .withParallelism(4)
 
-  private def rejected(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) =
-    verdicts.count(_._2.exists(_.isInstanceOf[Tlc.Verdict.Rejected]))
+  /** How many runs broke a property of the protocol on the path the engine took. */
+  private def violated(runs: Seq[Run]) = runs.count(_._2.exists(_.isInstanceOf[ProtocolSpace.Replay.Violated]))
 
   /** How many runs broke the contract checks of the simulation. */
-  private def broken(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) = verdicts.count(_._1)
+  private def broken(runs: Seq[Run]) = runs.count(_._1)
 
-  private def toolErrors(verdicts: Seq[(Boolean, Option[Tlc.Verdict])]) =
-    verdicts.flatMap(_._2).collect { case e: Tlc.Verdict.ToolError => e }
-
-  /**
-   * How many of a thousand of the model's behaviours diverge when replayed through `rules`, from a model altered by
-   * `alter`. Some drifts show only in rare states (two lanes ready at once), so the sample is large; replay is cheap.
-   */
-  private def divergences(config: String, rules: Engine.Rules, alter: Alter = Alter.none) =
-    ZIO.attemptBlocking {
-      val formal = Tlc.formal.get
-      ferry.testkit.tla.Behaviours
-        .generate(formal, "Ferry", config, 1000, 40, 7L, alter)
-        .map(
-          _.count(b =>
-            ModelReplay
-              .replay(b, ModelReplay.instance(formal, config), rules)
-              .isInstanceOf[ModelReplay.Verdict.Diverged]
-          )
-        )
-    }.orDie
+  /** Whether exploring every state of `config` under `rules` breaks `property`. */
+  private def explored(config: Config, rules: Engine.Rules, property: String): UIO[Boolean] =
+    ZIO.attemptBlocking(ProtocolSpace.check(config, rules)).orDie.map {
+      case StateSpace.Verdict.Violated(`property`, _, _) => true
+      case _                                             => false
+    }
 
   def spec = suite("Planted drift is caught")(
-    suite("in the code")(
-      test("serving the last ready lane first") {
-        for
-          traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), ServeLastReady, Alter.none)
-          replay <- divergences("FerryBatchOnly", ServeLastReady)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0), broken(traces) == 0)
-      },
-      test("ignoring the weight limit") {
-        for traces <- traceVerdicts(Seq(Family.Weighted), IgnoreWeightLimit, Alter.none)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, broken(traces) > 0)
-      },
-      test("leaving a cancelled input in its lane") {
-        for
-          traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), KeepCancelledInLane, Alter.none)
-          replay <- divergences("FerryBatchOnly", KeepCancelledInLane)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0), broken(traces) == 0)
-      }
-    ),
-    test("sending partial batches before their deadline is the contract's to catch: the model has no clock") {
-      for traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), IgnoreDeadline, Alter.none)
-      yield assertTrue(toolErrors(traces).isEmpty, broken(traces) > 0, rejected(traces) == 0)
+    test("serving the last ready lane first: by the properties, and by no promise a caller can check") {
+      for
+        space <- explored(Config.batchOnly, ServeLastReady, "FirstComeFirstServed")
+        runs  <- runs(Seq(Family.PerKeyBatched, Family.Make), ServeLastReady)
+      yield assertTrue(space, violated(runs) > 0, broken(runs) == 0)
     },
-    suite("in the model")(
-      test("a model that takes only full lanes rejects the code's partial batches") {
-        for traces <- traceVerdicts(Seq(Family.PerKeyBatched, Family.Make), Engine.Rules.standard, TakeOnlyFull)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0)
-      },
-      test("a model in which a cancelled caller keeps its place diverges from the code") {
-        for
-          traces <- traceVerdicts(Seq(Family.PerKeyBatched), Engine.Rules.standard, CancelKeepsPlace)
-          replay <- divergences("FerryBatchOnly", Engine.Rules.standard, CancelKeepsPlace)
-        yield assertTrue(toolErrors(traces).isEmpty, rejected(traces) > 0, replay.exists(_ > 0))
-      }
-    )
+    test("ignoring the weight limit: by the properties and by the contract") {
+      for
+        space <- explored(Config.weighted, IgnoreWeightLimit, "BatchBounded")
+        runs  <- runs(Seq(Family.Weighted), IgnoreWeightLimit)
+      yield assertTrue(space, violated(runs) > 0, broken(runs) > 0)
+    },
+    test("leaving a cancelled input in its lane: by the properties, and by no promise a caller can check") {
+      for
+        space <- explored(Config.perKey, KeepCancelledInLane, "CancelledNeverSent")
+        runs  <- runs(Seq(Family.PerKeyBatched, Family.Make), KeepCancelledInLane)
+      yield assertTrue(space, violated(runs) > 0, broken(runs) == 0)
+    },
+    test("sending partial batches before their deadline: by the contract alone, since the protocol has no clock") {
+      for
+        space <- ZIO.attemptBlocking(ProtocolSpace.check(Config.perKey, IgnoreDeadline)).orDie
+        runs  <- runs(Seq(Family.PerKeyBatched, Family.Make), IgnoreDeadline)
+      yield assertTrue(space.holds, violated(runs) == 0, broken(runs) > 0)
+    }
   ) @@ TestAspect.sequential @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.minutes)

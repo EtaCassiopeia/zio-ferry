@@ -5,10 +5,10 @@ import java.nio.file.{Files, Path, Paths}
 
 import zio.Chunk
 
-import ferry.{Conformance, Engine, FerrySimulation}
+import ferry.{Engine, FerrySimulation}
 import ferry.FerrySimulation.Family
 import ferry.Protocol.Action
-import ferry.testkit.tla.{Tlc, Value}
+import ferry.check.ProtocolSpace
 
 /**
  * Writes the branches of one simulated scenario for people to look at:
@@ -35,8 +35,7 @@ object Visualize:
     val explored = Multiverse.explore(scenario, seed, rules = rules)
     val steered  =
       Multiverse.steer(scenario, Multiverse.failedThenServed, rules = rules).map { (found, script, result) =>
-        val verdict = result.observation
-          .fold(Tlc.Verdict.Rejected("did not finish"))(o => Conformance.validate("steered", o.recorded(scenario)))
+        val verdict = result.observation.map(o => ProtocolSpace.replay(scenario.limits, o.trace, rules))
         Multiverse.Branch(
           explored.size,
           None,
@@ -75,8 +74,6 @@ object Visualize:
     // The template is the page's content; the document around it lets the file open on its own.
     s"""<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover"></head><body>\n$body\n</body></html>\n"""
 
-  private val names = Conformance.Names[String](c => Value.str(s"c$c"), w => Value.str(s"w$w"), Value.str)
-
   def json(title: String, scenario: String, branches: Vector[Multiverse.Branch]): String =
     def branch(b: Multiverse.Branch) =
       obj(
@@ -86,7 +83,7 @@ object Visualize:
         "forkAt"     -> b.forkAt.fold("null")(_.toString),
         "forced"     -> b.forced.toString,
         "verdict"    -> str(verdictText(b.verdict)),
-        "accepted"   -> b.verdict.accepted.toString,
+        "accepted"   -> b.verdict.exists(_.conforms).toString,
         "violations" -> arr(b.violations.map(str)),
         "hung"       -> b.result.run.hung.toString,
         "decisions"  -> arr(b.decisions.zipWithIndex.map { (d, i) =>
@@ -105,7 +102,7 @@ object Visualize:
             "i"    -> i.toString,
             "step" -> e.step.toString,
             "at"   -> e.at.toString,
-            "act"  -> value(Conformance.encode(e.action, names))
+            "act"  -> str(e.action.toString)
           )
         })
       )
@@ -145,7 +142,7 @@ object Visualize:
         "args" -> args
       ): Unit
     events.foreach { (e, i) =>
-      val args = obj("virtual time (ms)" -> (e.at / 1e6).toString, "act" -> value(Conformance.encode(e.action, names)))
+      val args = obj("virtual time (ms)" -> (e.at / 1e6).toString, "act" -> str(e.action.toString))
       e.action match
         case Action.Enqueue(c, _, _, _) => begin(s"c$c", i)
         case Action.Claim(c, _, _, _)   => begin(s"c$c", i); begin(s"d$c", i)
@@ -165,29 +162,12 @@ object Visualize:
     }
     obj("traceEvents" -> arr(Chunk.fromIterable(spans.result())), "displayTimeUnit" -> str("ms"))
 
-  private def verdictText(v: Tlc.Verdict): String = v match
-    case Tlc.Verdict.Accepted          => "accepted by the model"
-    case Tlc.Verdict.Rejected(why)     => s"rejected: $why"
-    case Tlc.Verdict.Skipped(why)      => s"not checked: $why"
-    case Tlc.Verdict.ToolError(output) => s"TLC failed: ${output.linesIterator.toSeq.lastOption.getOrElse("")}"
-
-  private def value(v: Value): String = v match
-    case Value.Bool(b)    => b.toString
-    case Value.Int(n)     => n.toString
-    case Value.Str(s)     => str(s)
-    case Value.Model(n)   => str(n)
-    case Value.Seq(items) => arr(Chunk.fromIterable(items.map(value)))
-    case Value.Set(items) => arr(Chunk.fromIterable(items.toVector.sortBy(_.render).map(value)))
-    case Value.Rec(fs)    => obj(fs.toSeq.map((k, x) => k -> value(x))*)
-    case Value.Fn(pairs)  =>
-      obj(
-        pairs.toSeq.map((k, x) =>
-          (k match
-            case Value.Str(s) => s;
-            case o            => o.render
-          ) -> value(x)
-        )*
-      )
+  private def verdictText(v: Option[ProtocolSpace.Replay]): String = v match
+    case Some(ProtocolSpace.Replay.Conforms(steps))             => s"every property held over $steps steps"
+    case Some(ProtocolSpace.Replay.Violated(step, property, _)) => s"$property broken at step $step"
+    case Some(ProtocolSpace.Replay.Diverged(step, recorded, _)) =>
+      s"diverged from the protocol at step $step ($recorded)"
+    case None => "the run did not finish"
 
   private def str(s: String): String =
     "\"" + s.flatMap {
