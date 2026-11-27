@@ -46,7 +46,7 @@ step mechanically: every step of the code is an action of the model, recorded ru
 TLC, and the model's behaviours are replayed through the code ([verification](https://etacassiopeia.github.io/zio-ferry/verification/)).
 
 ```sh
-sbt testFull
+sbt testFull                             # needs tla2tools.jar at the root, see Development
 formal/check.sh path/to/tla2tools.jar
 ```
 

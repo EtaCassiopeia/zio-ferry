@@ -61,7 +61,7 @@ for variant in FencedWriterUnfenced FencedWriterNoDedup; do fails FencedWriter "
 
 passes ProjectedWriter ProjectedWriter
 for variant in ProjectedWriterUnfencedProject ProjectedWriterEarlyAnswer; do fails ProjectedWriter "$variant"; done
-# TLC 1.7.4 (CI) prints "Temporal properties were violated"; newer releases name the property.
+# Older TLC releases print "Temporal properties were violated"; newer releases name the property.
 fails ProjectedWriter ProjectedWriterNoResume "Temporal propert(ies were|y EventuallyProjected was) violated"
 
 passes ProjectedWriterPartial ProjectedWriterPartial

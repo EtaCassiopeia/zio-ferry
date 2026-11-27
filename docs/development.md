@@ -22,7 +22,56 @@ sbt testFull               # every test; `test` is incremental in sbt 2
 sbt "++3.9.0 testFull"     # against the newest Scala as well as the 3.3 LTS
 ```
 
-CI runs formatting, the tests on JDK 17 and 21 with both Scala versions, both examples, and every TLA+ configuration.
+Some tests take their effort from the environment:
+
+| Variable | Effect |
+|---|---|
+| `FERRY_SAMPLES` | replaces the number of samples of every property test and the repeat count of every repeated test, e.g. `FERRY_SAMPLES=500` before a release |
+| `FERRY_TEST_TIMEOUT_SECONDS` | replaces the time limit of the suites that have one: lower it so a change that makes callers hang is reported quickly, raise it for a longer search |
+
+One suite, or one test of it:
+
+```sh
+sbt "core/testOnly ferry.DriftSpec"
+sbt "core/testOnly ferry.PerKeySpec -- -t \"never has two batches\""
+```
+
+### CI
+
+`.github/workflows/ci.yml` runs four jobs on every pull request and on `main`:
+
+| Job | What it runs |
+|---|---|
+| `format` | `sbt check` |
+| `test` | JDK 17 and 21 × Scala 3.3 and 3.9: `testFull` and the four examples, with `tla2tools.jar` for the conformance suites |
+| `formal` | `formal/check.sh`: every TLA+ configuration, and every weakened variant, which must fail |
+| `build` | the gate: passes only if every job above passed |
+
+The sbt commands of a job are one argument, separated by `;`. The sbt 2 runner joins separate arguments into one
+command line, so `sbt "test" "examples/runMain …"` would hand the examples to `test` as filters, and run nothing.
+
+## Reproducing a failed simulation
+
+A failed simulated run is reported with its seed, its scenario, and its decisions shrunk to the shortest script that
+still fails. Either replays it exactly, because a run is a function of its scenario and its decisions:
+
+```scala
+FerrySimulation.run(FerrySimulation.scenario(family, seed), Decisions.seeded(seed)) // the same run again
+FerrySimulation.run(scenario, Decisions.scripted(script))                           // the shrunk run
+```
+
+To look at a run, and at what changing one decision does to it:
+
+```sh
+sbt "core/Test/runMain ferry.viz.Visualize PerKeyBatched 7 target/viz"                  # family, seed, output directory
+sbt "core/Test/runMain ferry.viz.Visualize PerKeyBatched 7 target/viz ServeLastReady"   # under deliberately wrong rules
+```
+
+The family is one of `Make`, `PerKeyDirect`, `PerKeyBatched` and `Weighted`. The optional rules are the planted drifts
+of `DriftSpec`: `ServeLastReady`, `IgnoreWeightLimit` and `KeepCancelledInLane`. It writes `multiverse.html` (open it
+in a browser), `multiverse.json`, and a `branch-<id>.perfetto.json` per root branch, which
+[Perfetto](https://ui.perfetto.dev) shows as a timeline. The writer simulations run on ZIO's `TestClock` instead, and
+are reproduced by their seed.
 
 ## Formal models
 
@@ -33,16 +82,17 @@ repository, where both the tests and the script find it, or point `TLA2TOOLS` at
 formal/check.sh path/to/tla2tools.jar
 ```
 
+`check.sh` runs TLC on each configuration with `-deadlock -config <Name>.cfg`. One configuration by hand, from
+`formal/`:
+
+```sh
+java -cp ../tla2tools.jar tlc2.TLC -deadlock -config FerryNoBusyGuard.cfg Ferry.tla
+```
+
 A change to `Protocol.scala` needs the matching change to `formal/Ferry.tla`, or the conformance suites fail:
 trace validation rejects the code's runs, or replay of the model's behaviours diverges. A new action needs a case in
 `Protocol.Action`, the same name in the model's `Vocabulary`, and the same record in `act`. A new mechanism needs a
 variant without it that must fail.
-
-To see what a run did, and what changing one decision does to it:
-
-```sh
-sbt "core/Test/runMain ferry.viz.Visualize PerKeyBatched 7 target/viz"   # then open target/viz/multiverse.html
-```
 
 ## Documentation
 
